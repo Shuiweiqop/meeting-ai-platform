@@ -1,3 +1,4 @@
+import { useDeferredValue, useMemo, useState } from 'react';
 import { Head, Link, router } from '@inertiajs/react';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 
@@ -20,32 +21,58 @@ const TABS = [
     { key: 'completed',   label: 'Completed' },
 ];
 
-function TodoRow({ todo }) {
-    const done = todo.status === 'completed';
+function TodoRow({ todo: initial }) {
+    const [todo, setTodo] = useState(initial);
 
-    const toggle = () => {
-        const next = done ? 'pending' : 'completed';
-        router.patch(route('todo-items.update', todo.id), { status: next }, { preserveScroll: true });
+    const toggle = async () => {
+        const next = todo.status === 'completed' ? 'pending' : 'completed';
+        const prev = todo.status;
+
+        // Optimistic update — instant, no Inertia page refresh
+        setTodo(t => ({ ...t, status: next }));
+
+        try {
+            const res = await fetch(route('todo-items.update', todo.id), {
+                method:  'PATCH',
+                headers: {
+                    'Content-Type':  'application/json',
+                    'X-CSRF-TOKEN':  window.csrfToken ?? '',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: JSON.stringify({ status: next }),
+            });
+            if (!res.ok) throw new Error('Request failed');
+        } catch {
+            // Rollback on network error or server error
+            setTodo(t => ({ ...t, status: prev }));
+        }
     };
+
+    const done = todo.status === 'completed';
 
     return (
         <li className="flex items-start gap-4 py-4">
             <button
                 onClick={toggle}
-                className={`mt-0.5 h-5 w-5 shrink-0 rounded border-2 transition ${
-                    done ? 'border-green-500 bg-green-500' : 'border-gray-300 hover:border-indigo-400'
+                className={`mt-0.5 h-5 w-5 shrink-0 rounded border-2 transition-all duration-200 ${
+                    done
+                        ? 'border-green-500 bg-green-500 scale-110'
+                        : 'border-gray-300 hover:border-indigo-400 hover:scale-110'
                 }`}
                 aria-label="Toggle"
             >
                 {done && (
-                    <svg viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-full w-full p-0.5">
+                    <svg viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2"
+                        strokeLinecap="round" strokeLinejoin="round" className="h-full w-full p-0.5">
                         <path d="M2 6l3 3 5-5" />
                     </svg>
                 )}
             </button>
 
             <div className="flex-1 min-w-0">
-                <p className={`text-sm font-medium ${done ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                <p className={`text-sm font-medium transition-all duration-200 ${
+                    done ? 'text-gray-400 line-through' : 'text-gray-900'
+                }`}>
                     {todo.title}
                 </p>
                 {todo.description && (
@@ -69,7 +96,25 @@ function TodoRow({ todo }) {
 }
 
 export default function Index({ todos, counts, activeStatus }) {
+    const [search, setSearch] = useState('');
+
+    // useDeferredValue — React schedules this at lower priority so typing stays snappy
+    const deferredSearch = useDeferredValue(search);
+    const isStale = search !== deferredSearch;
+
+    // Local client-side filter — no server round-trip
+    const filteredTodos = useMemo(() => {
+        const q = deferredSearch.trim().toLowerCase();
+        if (!q) return todos.data;
+        return todos.data.filter(t =>
+            t.title.toLowerCase().includes(q) ||
+            t.description?.toLowerCase().includes(q) ||
+            t.meeting?.title.toLowerCase().includes(q)
+        );
+    }, [todos.data, deferredSearch]);
+
     const switchTab = (key) => {
+        setSearch('');
         router.get(route('todos.index'), key === 'all' ? {} : { status: key }, { preserveScroll: true });
     };
 
@@ -111,36 +156,83 @@ export default function Index({ todos, counts, activeStatus }) {
                             })}
                         </div>
 
+                        {/* Local search — useDeferredValue keeps typing instant */}
+                        <div className="border-b border-gray-100 px-6 py-3">
+                            <div className="relative">
+                                <svg className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400"
+                                    fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                        d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+                                </svg>
+                                <input
+                                    type="text"
+                                    value={search}
+                                    onChange={e => setSearch(e.target.value)}
+                                    placeholder="Filter tasks on this page…"
+                                    className={`w-full rounded-md border-gray-200 pl-9 pr-4 py-1.5 text-sm transition-opacity
+                                        focus:border-indigo-400 focus:ring-indigo-400
+                                        ${isStale ? 'opacity-60' : 'opacity-100'}`}
+                                />
+                                {search && (
+                                    <button
+                                        onClick={() => setSearch('')}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                                    >
+                                        ×
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
                         {/* List */}
                         <div className="px-6">
-                            {todos.data.length === 0 ? (
+                            {filteredTodos.length === 0 ? (
                                 <div className="py-16 text-center">
                                     <p className="text-sm text-gray-400 italic">
-                                        {activeStatus === 'completed'
-                                            ? 'No completed tasks yet.'
-                                            : 'No tasks assigned to you.'}
+                                        {search
+                                            ? `No tasks matching "${deferredSearch}".`
+                                            : activeStatus === 'completed'
+                                                ? 'No completed tasks yet.'
+                                                : 'No tasks assigned to you.'}
                                     </p>
+                                    {search && (
+                                        <button onClick={() => setSearch('')} className="mt-2 text-xs text-indigo-500 hover:underline">
+                                            Clear search
+                                        </button>
+                                    )}
                                 </div>
                             ) : (
                                 <>
-                                <ul className="divide-y divide-gray-100">
-                                    {todos.data.map((todo) => (
-                                        <TodoRow key={todo.id} todo={todo} />
-                                    ))}
-                                </ul>
-                                {todos.links.length > 3 && (
-                                    <div className="flex justify-center gap-1 py-4">
-                                        {todos.links.map((link, i) => (
-                                            <Link
-                                                key={i}
-                                                href={link.url ?? '#'}
-                                                preserveScroll
-                                                className={`px-3 py-1.5 rounded text-sm ${link.active ? 'bg-indigo-600 text-white font-semibold' : link.url ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'text-gray-300 cursor-default'}`}
-                                                dangerouslySetInnerHTML={{ __html: link.label }}
-                                            />
+                                    <ul className="divide-y divide-gray-100">
+                                        {filteredTodos.map((todo) => (
+                                            <TodoRow key={todo.id} todo={todo} />
                                         ))}
-                                    </div>
-                                )}
+                                    </ul>
+                                    {/* Pagination — only shown when no local search active */}
+                                    {!search && todos.links.length > 3 && (
+                                        <div className="flex justify-center gap-1 py-4">
+                                            {todos.links.map((link, i) => (
+                                                <Link
+                                                    key={i}
+                                                    href={link.url ?? '#'}
+                                                    preserveScroll
+                                                    className={`px-3 py-1.5 rounded text-sm ${
+                                                        link.active
+                                                            ? 'bg-indigo-600 text-white font-semibold'
+                                                            : link.url
+                                                                ? 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                                                : 'text-gray-300 cursor-default'
+                                                    }`}
+                                                    dangerouslySetInnerHTML={{ __html: link.label }}
+                                                />
+                                            ))}
+                                        </div>
+                                    )}
+                                    {search && (
+                                        <p className="py-3 text-xs text-gray-400 text-center">
+                                            {filteredTodos.length} result{filteredTodos.length !== 1 ? 's' : ''} on this page
+                                        </p>
+                                    )}
                                 </>
                             )}
                         </div>

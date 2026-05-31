@@ -19,18 +19,20 @@ function StatusBadge({ status }) {
 
 function TodoRow({ todo: initial }) {
     const [todo, setTodo] = useState(initial);
-    const [saving, setSaving] = useState(false);
 
     const toggle = () => {
         const next = todo.status === 'completed' ? 'pending' : 'completed';
-        setSaving(true);
+        const prev = todo.status;
+
+        // Optimistic update — instant visual feedback
+        setTodo(t => ({ ...t, status: next }));
+
         router.patch(
             route('todo-items.update', todo.id),
             { status: next },
             {
                 preserveScroll: true,
-                onSuccess: () => setTodo({ ...todo, status: next }),
-                onFinish: () => setSaving(false),
+                onError: () => setTodo(t => ({ ...t, status: prev })), // rollback on failure
             },
         );
     };
@@ -41,11 +43,10 @@ function TodoRow({ todo: initial }) {
         <li className="flex items-start gap-3 py-3">
             <button
                 onClick={toggle}
-                disabled={saving}
-                className={`mt-0.5 h-5 w-5 shrink-0 rounded border-2 transition ${
+                className={`mt-0.5 h-5 w-5 shrink-0 rounded border-2 transition-all duration-200 ${
                     done
-                        ? 'border-green-500 bg-green-500 text-white'
-                        : 'border-gray-300 bg-white hover:border-indigo-400'
+                        ? 'border-green-500 bg-green-500 text-white scale-110'
+                        : 'border-gray-300 bg-white hover:border-indigo-400 hover:scale-110'
                 }`}
                 aria-label="Toggle task"
             >
@@ -56,7 +57,7 @@ function TodoRow({ todo: initial }) {
                 )}
             </button>
             <div className="flex-1 min-w-0">
-                <p className={`text-sm font-medium ${done ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                <p className={`text-sm font-medium transition-all duration-200 ${done ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
                     {todo.title}
                 </p>
                 {todo.description && (
