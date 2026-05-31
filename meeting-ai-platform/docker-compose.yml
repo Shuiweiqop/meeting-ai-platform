@@ -1,0 +1,47 @@
+services:
+  app:
+    image: lorisleiva/laravel-docker:8.3
+    container_name: meeting_ai_app
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/var/www/html
+    working_dir: /var/www/html
+    # 🌟 关键一招：强行让容器在启动时常驻运行 Laravel 的 Web 服务
+    command: php artisan serve --host=0.0.0.0 --port=8000
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - meeting_ai_network
+
+  mysql:
+    image: mysql:8.0
+    container_name: meeting_ai_mysql
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: meeting_intelligence
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - meeting_ai_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: meeting_ai_redis
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - meeting_ai_network
+
+networks:
+  meeting_ai_network:
+    driver: bridge
+
+volumes:
+  db_data:
+  redis_data:
