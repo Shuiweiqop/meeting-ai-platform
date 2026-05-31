@@ -32,7 +32,15 @@ class ProcessMeetingJob implements ShouldQueue
         $this->meeting->update(['status' => 'processing']);
         Log::info("ProcessMeetingJob [{$this->meeting->id}]: started.");
 
-        $transcriptText = $this->transcribe();
+        $participantNames = $this->resolveParticipantNames();
+
+        // Plan B: transcribe with participant names injected into prompt
+        $transcriptText = $this->transcribe($participantNames);
+
+        // Plan C: second LLM pass to replace Speaker A/B with real names
+        if (count($participantNames) > 0) {
+            $transcriptText = $this->mapSpeakers($transcriptText, $participantNames);
+        }
 
         Transcript::create([
             'meeting_id' => $this->meeting->id,
@@ -88,7 +96,22 @@ class ProcessMeetingJob implements ShouldQueue
         Http::post($webhookUrl, ['text' => $text]);
     }
 
-    private function transcribe(): string
+    private function resolveParticipantNames(): array
+    {
+        $this->meeting->loadMissing(['user', 'team.members']);
+
+        // Start with the uploader
+        $names = collect([$this->meeting->user->name]);
+
+        // Add team members if the meeting belongs to a team
+        if ($this->meeting->team) {
+            $names = $names->merge($this->meeting->team->members->pluck('name'));
+        }
+
+        return $names->unique()->values()->toArray();
+    }
+
+    private function transcribe(array $participantNames = []): string
     {
         $audioPath = Storage::disk('public')->path($this->meeting->audio_path);
         $mimeType  = $this->resolveMimeType($this->meeting->audio_path);
@@ -96,15 +119,71 @@ class ProcessMeetingJob implements ShouldQueue
 
         $client = \Gemini::client(config('services.gemini.key'));
 
+        $nameHint = count($participantNames) > 0
+            ? 'The following people may be present: ' . implode(', ', $participantNames) . '. ' .
+              'Label each speaker by their actual name when you can identify them from audio or context. ' .
+              'If a speaker cannot be confidently identified, use generic labels (Speaker A, Speaker B, etc.).'
+            : 'If multiple speakers are present, add speaker labels (e.g. Speaker A:).';
+
         $response = $client->generativeModel(model: 'gemini-2.5-flash')
             ->generateContent([
                 new Blob(mimeType: $mimeType, data: $audioData),
-                'Transcribe this audio recording accurately. ' .
-                'If multiple speakers are present, add speaker labels (e.g. Speaker A:). ' .
-                'Return only the transcript text, no commentary.',
+                'Transcribe this audio recording accurately. ' . $nameHint . ' ' .
+                'Return only the transcript text with speaker labels, no commentary.',
             ]);
 
         return $response->text();
+    }
+
+    private function mapSpeakers(string $transcript, array $participantNames): string
+    {
+        // Only run if there are generic Speaker labels to replace
+        if (! preg_match('/Speaker [A-Z]:/i', $transcript)) {
+            Log::info("ProcessMeetingJob [{$this->meeting->id}]: no generic speaker labels found, skipping mapSpeakers.");
+            return $transcript;
+        }
+
+        $nameList = implode(', ', $participantNames);
+        $client   = \Gemini::client(config('services.gemini.key'));
+
+        $prompt = <<<PROMPT
+Below is a meeting transcript that uses generic speaker labels (Speaker A, Speaker B, etc.) and a list of known participants.
+
+Using context clues in the transcript (how people address each other, names mentioned, speaking style), map each generic speaker label to the most likely real participant name.
+
+Known participants: {$nameList}
+
+Respond with ONLY a valid JSON object — no markdown, no code fences, no commentary. Example:
+{"Speaker A": "Nigel", "Speaker B": "Jefry", "Speaker C": "Unknown"}
+
+If you cannot determine who a speaker is, use "Unknown" as the value.
+
+TRANSCRIPT:
+{$transcript}
+PROMPT;
+
+        $response = $client->generativeModel(model: 'gemini-2.5-flash')
+            ->generateContent([$prompt]);
+
+        $raw  = $response->text();
+        $json = preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($raw));
+        $map  = json_decode($json, true);
+
+        if (! is_array($map)) {
+            Log::warning("ProcessMeetingJob [{$this->meeting->id}]: mapSpeakers returned invalid JSON, using original transcript.");
+            return $transcript;
+        }
+
+        Log::info("ProcessMeetingJob [{$this->meeting->id}]: speaker map resolved", $map);
+
+        // Replace "Speaker A:" → "Nigel:" etc., skip "Unknown" mappings
+        foreach ($map as $label => $name) {
+            if ($name !== 'Unknown' && ! empty($name)) {
+                $transcript = preg_replace('/\b' . preg_quote($label, '/') . ':/i', "{$name}:", $transcript);
+            }
+        }
+
+        return $transcript;
     }
 
     private function summarize(string $transcript): void
