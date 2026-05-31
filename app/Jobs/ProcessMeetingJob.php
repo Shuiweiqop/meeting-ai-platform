@@ -11,21 +11,32 @@ use App\Models\Transcript;
 use App\Models\User;
 use Gemini\Data\Blob;
 use Gemini\Enums\MimeType;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Concurrency;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 
-class ProcessMeetingJob implements ShouldQueue
+class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
 {
     use Queueable;
 
-    public int $tries = 3;
+    public int $tries   = 3;
     public int $timeout = 600;
 
+    // Unique lock expires after 1 hour — prevents duplicate processing
+    public int $uniqueFor = 3600;
+
     public function __construct(public readonly Meeting $meeting) {}
+
+    // Lock key = meeting ID, so the same meeting can't be queued twice
+    public function uniqueId(): string
+    {
+        return (string) $this->meeting->id;
+    }
 
     public function handle(): void
     {
@@ -188,44 +199,36 @@ PROMPT;
 
     private function summarize(string $transcript): void
     {
-        $client = \Gemini::client(config('services.gemini.key'));
+        $apiKey = config('services.gemini.key');
 
-        $prompt = <<<PROMPT
-You are an expert meeting analyst. Analyse the following meeting transcript and respond with ONLY a valid JSON object — no markdown, no code fences, no commentary.
+        // Concurrent Gemini calls — summary and todos are independent
+        [$summaryRaw, $todosRaw] = Concurrency::run([
+            fn () => $this->callGeminiForSummary($transcript, $apiKey),
+            fn () => $this->callGeminiForTodos($transcript, $apiKey),
+        ]);
 
-Required JSON structure:
-{
-  "summary": "2-4 sentence overview of the meeting",
-  "key_points": ["point 1", "point 2", "point 3"],
-  "todos": [
-    {
-      "title": "short action item title",
-      "description": "optional detail or context",
-      "assignee_name": "first name or full name of the person responsible, or empty string if unknown"
-    }
-  ]
-}
-
-TRANSCRIPT:
-PROMPT;
-
-        $response = $client->generativeModel(model: 'gemini-2.5-flash')
-            ->generateContent([$prompt . "\n\n" . $transcript]);
-
-        $raw  = $response->text();
-        $json = preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($raw));
-        $data = json_decode($json, true) ?? [];
+        // Persist summary
+        $summaryData = json_decode(
+            preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($summaryRaw)),
+            true
+        ) ?? [];
 
         AiSummary::create([
             'meeting_id'   => $this->meeting->id,
-            'summary'      => $data['summary'] ?? 'No summary generated.',
-            'key_points'   => $data['key_points'] ?? [],
-            'raw_response' => $raw,
+            'summary'      => $summaryData['summary'] ?? 'No summary generated.',
+            'key_points'   => $summaryData['key_points'] ?? [],
+            'raw_response' => $summaryRaw,
         ]);
 
-        foreach ($data['todos'] ?? [] as $todo) {
+        // Persist todos
+        $todos = json_decode(
+            preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($todosRaw)),
+            true
+        ) ?? [];
+
+        foreach ($todos as $todo) {
             $assignee = null;
-            if (!empty($todo['assignee_name'])) {
+            if (! empty($todo['assignee_name'])) {
                 $assignee = User::where('name', 'like', '%' . $todo['assignee_name'] . '%')->first();
             }
 
@@ -238,6 +241,53 @@ PROMPT;
                 'status'      => 'pending',
             ]);
         }
+    }
+
+    private function callGeminiForSummary(string $transcript, string $apiKey): string
+    {
+        $prompt = <<<PROMPT
+You are an expert meeting analyst. Analyse the following meeting transcript.
+Respond with ONLY a valid JSON object — no markdown, no code fences, no commentary.
+
+Required structure:
+{
+  "summary": "2-4 sentence overview of the meeting",
+  "key_points": ["point 1", "point 2", "point 3"]
+}
+
+TRANSCRIPT:
+{$transcript}
+PROMPT;
+
+        return \Gemini::client($apiKey)
+            ->generativeModel(model: 'gemini-2.5-flash')
+            ->generateContent([$prompt])
+            ->text();
+    }
+
+    private function callGeminiForTodos(string $transcript, string $apiKey): string
+    {
+        $prompt = <<<PROMPT
+You are an expert meeting analyst. Extract all action items from the following meeting transcript.
+Respond with ONLY a valid JSON array — no markdown, no code fences, no commentary.
+
+Required structure:
+[
+  {
+    "title": "short action item title",
+    "description": "optional detail or context",
+    "assignee_name": "first name or full name of the person responsible, or empty string if unknown"
+  }
+]
+
+TRANSCRIPT:
+{$transcript}
+PROMPT;
+
+        return \Gemini::client($apiKey)
+            ->generativeModel(model: 'gemini-2.5-flash')
+            ->generateContent([$prompt])
+            ->text();
     }
 
     private function resolveMimeType(string $path): MimeType
