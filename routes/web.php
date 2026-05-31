@@ -5,18 +5,13 @@ use App\Http\Controllers\MeetingController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\TeamController;
 use App\Http\Controllers\TodoItemController;
-use App\Models\User;
-use Illuminate\Foundation\Application;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
-use Inertia\Inertia;
 
 Route::get('/', function () {
-    return Inertia::render('Welcome', [
-        'canLogin' => Route::has('login'),
-        'canRegister' => Route::has('register'),
-        'laravelVersion' => Application::VERSION,
-        'phpVersion' => PHP_VERSION,
-    ]);
+    return Auth::check()
+        ? redirect()->route('dashboard')
+        : redirect()->route('login');
 });
 
 Route::get('/dashboard', DashboardController::class)
