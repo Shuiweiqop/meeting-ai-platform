@@ -6,10 +6,12 @@ use App\Http\Requests\StoreMeetingRequest;
 use App\Jobs\ProcessMeetingJob;
 use App\Models\Meeting;
 use App\Models\Team;
+use Barryvdh\DomPDF\Facade\Pdf;
 use FFMpeg\FFMpeg;
 use FFMpeg\Format\Audio\Mp3;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response as HttpResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -90,6 +92,20 @@ class MeetingController extends Controller
         return Inertia::render('Meeting/Show', [
             'meeting' => $meeting->load(['transcript', 'aiSummary', 'todoItems.assignee']),
         ]);
+    }
+
+    public function exportPdf(Meeting $meeting): HttpResponse
+    {
+        abort_if($meeting->user_id !== Auth::id(), 403);
+
+        $meeting->load(['transcript', 'aiSummary', 'todoItems.assignee']);
+
+        $pdf = Pdf::loadView('pdf.meeting', ['meeting' => $meeting])
+            ->setPaper('a4', 'portrait');
+
+        $filename = Str::slug($meeting->title) . '-summary.pdf';
+
+        return $pdf->download($filename);
     }
 
     public function edit(Meeting $meeting): Response

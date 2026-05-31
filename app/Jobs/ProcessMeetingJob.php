@@ -2,6 +2,8 @@
 
 namespace App\Jobs;
 
+use App\Mail\MeetingProcessedMail;
+use App\Mail\TodoAssignedMail;
 use App\Models\AiSummary;
 use App\Models\Meeting;
 use App\Models\TodoItem;
@@ -12,6 +14,7 @@ use Gemini\Enums\MimeType;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 
 class ProcessMeetingJob implements ShouldQueue
@@ -44,6 +47,24 @@ class ProcessMeetingJob implements ShouldQueue
 
         $this->meeting->update(['status' => 'completed']);
         Log::info("ProcessMeetingJob [{$this->meeting->id}]: done.");
+
+        $this->sendNotifications();
+    }
+
+    private function sendNotifications(): void
+    {
+        $meeting = $this->meeting->load(['user', 'todoItems.assignee']);
+
+        // Notify uploader
+        Mail::to($meeting->user)->queue(new MeetingProcessedMail($meeting));
+
+        // Notify each unique assignee (skip if same as uploader)
+        $meeting->todoItems
+            ->filter(fn ($t) => $t->assignee && $t->assignee->id !== $meeting->user_id)
+            ->groupBy('assigned_to')
+            ->each(function ($todos) {
+                Mail::to($todos->first()->assignee)->queue(new TodoAssignedMail($todos->first()));
+            });
     }
 
     private function transcribe(): string
