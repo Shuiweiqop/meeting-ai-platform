@@ -24,6 +24,7 @@ Route::middleware('auth')->group(function () {
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 
     Route::resource('meetings', MeetingController::class);
+    Route::get('/todos', [TodoItemController::class, 'index'])->name('todos.index');
     Route::patch('/todo-items/{todoItem}', [TodoItemController::class, 'update'])->name('todo-items.update');
 
     Route::resource('teams', TeamController::class)->except(['edit', 'update']);

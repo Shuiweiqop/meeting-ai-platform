@@ -42,6 +42,12 @@ export default function AuthenticatedLayout({ header, children }) {
                                 >
                                     Teams
                                 </NavLink>
+                                <NavLink
+                                    href={route('todos.index')}
+                                    active={route().current('todos.*')}
+                                >
+                                    My Todos
+                                </NavLink>
                             </div>
                         </div>
 
@@ -157,6 +163,12 @@ export default function AuthenticatedLayout({ header, children }) {
                             active={route().current('teams.*')}
                         >
                             Teams
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink
+                            href={route('todos.index')}
+                            active={route().current('todos.*')}
+                        >
+                            My Todos
                         </ResponsiveNavLink>
                     </div>
 
