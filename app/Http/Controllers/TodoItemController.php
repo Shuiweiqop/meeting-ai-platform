@@ -27,7 +27,7 @@ class TodoItemController extends Controller
 
         $counts = TodoItem::where('assigned_to', Auth::id())
             ->selectRaw("
-                count(*) as all,
+                count(*) as total,
                 sum(status = 'pending') as pending,
                 sum(status = 'in_progress') as in_progress,
                 sum(status = 'completed') as completed

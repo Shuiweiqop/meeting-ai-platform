@@ -18,12 +18,20 @@ use Inertia\Response;
 
 class MeetingController extends Controller
 {
-    public function index(): Response
+    public function index(Request $request): Response
     {
-        $meetings = Meeting::where('user_id', Auth::id())->latest()->get();
+        $search = $request->get('search');
+        $status = $request->get('status');
+
+        $meetings = Meeting::where('user_id', Auth::id())
+            ->when($search, fn ($q) => $q->where('title', 'like', "%{$search}%"))
+            ->when($status, fn ($q) => $q->where('status', $status))
+            ->latest()
+            ->get();
 
         return Inertia::render('Meeting/Index', [
             'meetings' => $meetings,
+            'filters'  => ['search' => $search ?? '', 'status' => $status ?? ''],
         ]);
     }
 

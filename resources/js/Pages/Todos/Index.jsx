@@ -86,7 +86,7 @@ export default function Index({ todos, counts, activeStatus }) {
                         {/* Filter tabs */}
                         <div className="flex border-b border-gray-200">
                             {TABS.map((tab) => {
-                                const count = tab.key === 'all' ? counts?.all : counts?.[tab.key];
+                                const count = tab.key === 'all' ? counts?.total : counts?.[tab.key];
                                 const isActive = activeStatus === tab.key;
                                 return (
                                     <button
