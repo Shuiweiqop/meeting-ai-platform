@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 
 const STATUS_STYLES = {
@@ -71,8 +71,17 @@ function TodoRow({ todo: initial }) {
 }
 
 export default function Show({ meeting }) {
+    const { props } = usePage();
     const audioUrl = meeting.audio_path ? `/storage/${meeting.audio_path}` : null;
     const isProcessing = meeting.status === 'pending' || meeting.status === 'processing';
+    const shareUrl = meeting.share_token ? `${window.location.origin}/share/${meeting.share_token}` : null;
+    const [copied, setCopied] = useState(false);
+
+    const copyShareUrl = (url) => {
+        navigator.clipboard.writeText(url);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
 
     useEffect(() => {
         if (!isProcessing) return;
@@ -90,16 +99,30 @@ export default function Show({ meeting }) {
                     </div>
                     <div className="flex items-center gap-3">
                         {meeting.status === 'completed' && (
-                            <a
-                                href={route('meetings.export', meeting.id)}
-                                className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500"
-                                target="_blank"
-                            >
-                                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
-                                </svg>
-                                Export PDF
-                            </a>
+                            <>
+                                {shareUrl ? (
+                                    <button
+                                        onClick={() => copyShareUrl(shareUrl)}
+                                        className="inline-flex items-center gap-1.5 rounded-md bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-200"
+                                    >
+                                        {copied ? '✓ Copied!' : '🔗 Copy Link'}
+                                    </button>
+                                ) : (
+                                    <button
+                                        onClick={() => router.post(route('meetings.share.generate', meeting.id))}
+                                        className="inline-flex items-center gap-1.5 rounded-md bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-200"
+                                    >
+                                        Share
+                                    </button>
+                                )}
+                                <a
+                                    href={route('meetings.export', meeting.id)}
+                                    className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500"
+                                    target="_blank"
+                                >
+                                    Export PDF
+                                </a>
+                            </>
                         )}
                         <Link href={route('meetings.edit', meeting.id)} className="text-sm font-medium text-gray-600 hover:text-gray-900">
                             Edit
@@ -150,8 +173,14 @@ export default function Show({ meeting }) {
                     )}
 
                     {meeting.status === 'failed' && (
-                        <div className="rounded-lg bg-red-50 p-4 ring-1 ring-red-200">
-                            <p className="text-sm text-red-700">Processing failed. Please try re-uploading the recording.</p>
+                        <div className="flex items-center justify-between rounded-lg bg-red-50 p-4 ring-1 ring-red-200">
+                            <p className="text-sm text-red-700">Processing failed. You can retry or re-upload the recording.</p>
+                            <button
+                                onClick={() => router.post(route('meetings.retry', meeting.id))}
+                                className="ml-4 shrink-0 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-500"
+                            >
+                                Retry
+                            </button>
                         </div>
                     )}
 

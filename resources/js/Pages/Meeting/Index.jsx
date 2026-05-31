@@ -25,6 +25,29 @@ function StatusBadge({ status }) {
     );
 }
 
+function Pagination({ links }) {
+    if (links.length <= 3) return null;
+    return (
+        <div className="mt-6 flex items-center justify-center gap-1">
+            {links.map((link, i) => (
+                <Link
+                    key={i}
+                    href={link.url ?? '#'}
+                    preserveScroll
+                    className={`px-3 py-1.5 rounded text-sm ${
+                        link.active
+                            ? 'bg-indigo-600 text-white font-semibold'
+                            : link.url
+                                ? 'bg-white text-gray-600 hover:bg-gray-50 ring-1 ring-gray-200'
+                                : 'bg-white text-gray-300 ring-1 ring-gray-200 cursor-default'
+                    }`}
+                    dangerouslySetInnerHTML={{ __html: link.label }}
+                />
+            ))}
+        </div>
+    );
+}
+
 export default function Index({ meetings, filters = {} }) {
     const [search, setSearch] = useState(filters.search ?? '');
     const [status, setStatus] = useState(filters.status ?? '');
@@ -116,7 +139,7 @@ export default function Index({ meetings, filters = {} }) {
                     </div>
 
                     {/* Results */}
-                    {meetings.length === 0 ? (
+                    {meetings.data.length === 0 ? (
                         <div className="rounded-lg border-2 border-dashed border-gray-300 bg-white p-16 text-center">
                             <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
@@ -138,8 +161,9 @@ export default function Index({ meetings, filters = {} }) {
                             )}
                         </div>
                     ) : (
+                        <>
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                            {meetings.map((meeting) => (
+                            {meetings.data.map((meeting) => (
                                 <div key={meeting.id} className="flex flex-col rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
                                     <div className="flex-1 p-5">
                                         <div className="flex items-start justify-between gap-2">
@@ -172,6 +196,8 @@ export default function Index({ meetings, filters = {} }) {
                                 </div>
                             ))}
                         </div>
+                        <Pagination links={meetings.links} />
+                        </>
                     )}
                 </div>
             </div>

@@ -23,7 +23,7 @@ class TodoItemController extends Controller
             $query->where('status', $status);
         }
 
-        $todos = $query->get();
+        $todos = $query->paginate(20)->withQueryString();
 
         $counts = TodoItem::where('assigned_to', Auth::id())
             ->selectRaw("

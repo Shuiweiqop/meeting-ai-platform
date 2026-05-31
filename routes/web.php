@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\SharedMeetingController;
 use App\Http\Controllers\MeetingController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\TeamController;
@@ -14,6 +15,8 @@ Route::get('/', function () {
         : redirect()->route('login');
 });
 
+Route::get('/share/{token}', [SharedMeetingController::class, 'show'])->name('share.show');
+
 Route::get('/dashboard', DashboardController::class)
     ->middleware(['auth', 'verified'])
     ->name('dashboard');
@@ -25,6 +28,9 @@ Route::middleware('auth')->group(function () {
 
     Route::resource('meetings', MeetingController::class);
     Route::get('/meetings/{meeting}/export', [MeetingController::class, 'exportPdf'])->name('meetings.export');
+    Route::post('/meetings/{meeting}/retry', [MeetingController::class, 'retry'])->name('meetings.retry');
+    Route::post('/meetings/{meeting}/share', [SharedMeetingController::class, 'generate'])->name('meetings.share.generate');
+    Route::delete('/meetings/{meeting}/share', [SharedMeetingController::class, 'revoke'])->name('meetings.share.revoke');
     Route::get('/todos', [TodoItemController::class, 'index'])->name('todos.index');
     Route::patch('/todo-items/{todoItem}', [TodoItemController::class, 'update'])->name('todo-items.update');
 

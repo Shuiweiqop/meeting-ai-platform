@@ -29,7 +29,8 @@ class MeetingController extends Controller
             ->when($search, fn ($q) => $q->where('title', 'like', "%{$search}%"))
             ->when($status, fn ($q) => $q->where('status', $status))
             ->latest()
-            ->get();
+            ->paginate(12)
+            ->withQueryString();
 
         return Inertia::render('Meeting/Index', [
             'meetings' => $meetings,
@@ -92,6 +93,22 @@ class MeetingController extends Controller
         return Inertia::render('Meeting/Show', [
             'meeting' => $meeting->load(['transcript', 'aiSummary', 'todoItems.assignee']),
         ]);
+    }
+
+    public function retry(Meeting $meeting): RedirectResponse
+    {
+        abort_if($meeting->user_id !== Auth::id(), 403);
+        abort_if($meeting->status !== 'failed', 422);
+
+        // Clean up previous partial results
+        $meeting->transcript?->delete();
+        $meeting->aiSummary?->delete();
+        $meeting->todoItems()->delete();
+        $meeting->update(['status' => 'pending']);
+
+        ProcessMeetingJob::dispatch($meeting);
+
+        return back()->with('success', 'Meeting queued for reprocessing.');
     }
 
     public function exportPdf(Meeting $meeting): HttpResponse

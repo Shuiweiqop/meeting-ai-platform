@@ -113,7 +113,7 @@ export default function Index({ todos, counts, activeStatus }) {
 
                         {/* List */}
                         <div className="px-6">
-                            {todos.length === 0 ? (
+                            {todos.data.length === 0 ? (
                                 <div className="py-16 text-center">
                                     <p className="text-sm text-gray-400 italic">
                                         {activeStatus === 'completed'
@@ -122,11 +122,26 @@ export default function Index({ todos, counts, activeStatus }) {
                                     </p>
                                 </div>
                             ) : (
+                                <>
                                 <ul className="divide-y divide-gray-100">
-                                    {todos.map((todo) => (
+                                    {todos.data.map((todo) => (
                                         <TodoRow key={todo.id} todo={todo} />
                                     ))}
                                 </ul>
+                                {todos.links.length > 3 && (
+                                    <div className="flex justify-center gap-1 py-4">
+                                        {todos.links.map((link, i) => (
+                                            <Link
+                                                key={i}
+                                                href={link.url ?? '#'}
+                                                preserveScroll
+                                                className={`px-3 py-1.5 rounded text-sm ${link.active ? 'bg-indigo-600 text-white font-semibold' : link.url ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'text-gray-300 cursor-default'}`}
+                                                dangerouslySetInnerHTML={{ __html: link.label }}
+                                            />
+                                        ))}
+                                    </div>
+                                )}
+                                </>
                             )}
                         </div>
 

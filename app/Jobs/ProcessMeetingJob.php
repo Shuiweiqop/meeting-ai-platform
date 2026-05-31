@@ -13,6 +13,7 @@ use Gemini\Data\Blob;
 use Gemini\Enums\MimeType;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
@@ -65,6 +66,26 @@ class ProcessMeetingJob implements ShouldQueue
             ->each(function ($todos) {
                 Mail::to($todos->first()->assignee)->queue(new TodoAssignedMail($todos->first()));
             });
+
+        // Slack notification
+        $this->notifySlack($meeting);
+    }
+
+    private function notifySlack($meeting): void
+    {
+        $webhookUrl = $meeting->user->slack_webhook_url;
+        if (! $webhookUrl) return;
+
+        $todos = $meeting->todoItems;
+        $summary = $meeting->aiSummary?->summary ?? 'No summary generated.';
+        $todoLines = $todos->map(fn ($t) => "• {$t->title}" . ($t->assignee ? " → {$t->assignee->name}" : ''))->implode("\n");
+
+        $text = "*Meeting Ready: {$meeting->title}*\n\n{$summary}";
+        if ($todoLines) {
+            $text .= "\n\n*Action Items:*\n{$todoLines}";
+        }
+
+        Http::post($webhookUrl, ['text' => $text]);
     }
 
     private function transcribe(): string

@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
-#[Fillable(['team_id', 'user_id', 'title', 'description', 'audio_path', 'status', 'duration_seconds'])]
+#[Fillable(['team_id', 'user_id', 'title', 'description', 'audio_path', 'status', 'duration_seconds', 'share_token'])]
 class Meeting extends Model
 {
     use HasFactory;
