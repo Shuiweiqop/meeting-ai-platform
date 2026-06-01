@@ -26,13 +26,10 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
 
     public int $tries   = 3;
     public int $timeout = 600;
-
-    // Unique lock expires after 1 hour — prevents duplicate processing
     public int $uniqueFor = 3600;
 
     public function __construct(public readonly Meeting $meeting) {}
 
-    // Lock key = meeting ID, so the same meeting can't be queued twice
     public function uniqueId(): string
     {
         return (string) $this->meeting->id;
@@ -45,172 +42,183 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
 
         $participantNames = $this->resolveParticipantNames();
 
-        // Plan B: transcribe with participant names injected into prompt
-        $transcriptText = $this->transcribe($participantNames);
+        // Stage 1: Transcribe audio → timestamped segments
+        $this->updateStage('transcribing');
+        $segments = $this->transcribe($participantNames);
 
-        // Plan C: second LLM pass to replace Speaker A/B with real names
+        // Stage 2: Map generic "Speaker A" labels to real names
+        $this->updateStage('mapping_speakers');
         if (count($participantNames) > 0) {
-            $transcriptText = $this->mapSpeakers($transcriptText, $participantNames);
+            $segments = $this->mapSpeakers($segments, $participantNames);
         }
+
+        // Build plain-text content from segments for backwards compatibility
+        $content = collect($segments)
+            ->map(fn ($s) => trim(($s['speaker'] ? "{$s['speaker']}: " : '') . $s['text']))
+            ->implode("\n\n");
 
         Transcript::create([
             'meeting_id' => $this->meeting->id,
-            'content'    => $transcriptText,
+            'content'    => $content,
+            'segments'   => $segments,
             'language'   => null,
         ]);
 
-        Log::info("ProcessMeetingJob [{$this->meeting->id}]: transcript saved.");
+        Log::info("ProcessMeetingJob [{$this->meeting->id}]: transcript saved ({$this->countSegments($segments)} segments).");
 
-        $this->summarize($transcriptText);
+        // Stage 3: Concurrent summary + todos generation
+        $this->updateStage('summarizing');
+        $this->summarize($content);
 
         Log::info("ProcessMeetingJob [{$this->meeting->id}]: summary + todos saved.");
 
-        $this->meeting->update(['status' => 'completed']);
+        $this->meeting->update(['status' => 'completed', 'processing_stage' => null]);
         Log::info("ProcessMeetingJob [{$this->meeting->id}]: done.");
 
         $this->sendNotifications();
     }
 
-    private function sendNotifications(): void
+    private function updateStage(string $stage): void
     {
-        $meeting = $this->meeting->load(['user', 'todoItems.assignee']);
-
-        // Notify uploader
-        Mail::to($meeting->user)->queue(new MeetingProcessedMail($meeting));
-
-        // Notify each unique assignee (skip if same as uploader)
-        $meeting->todoItems
-            ->filter(fn ($t) => $t->assignee && $t->assignee->id !== $meeting->user_id)
-            ->groupBy('assigned_to')
-            ->each(function ($todos) {
-                Mail::to($todos->first()->assignee)->queue(new TodoAssignedMail($todos->first()));
-            });
-
-        // Slack notification
-        $this->notifySlack($meeting);
+        $this->meeting->update(['processing_stage' => $stage]);
     }
 
-    private function notifySlack($meeting): void
+    private function countSegments(array $segments): int
     {
-        $webhookUrl = $meeting->user->slack_webhook_url;
-        if (! $webhookUrl) return;
-
-        $todos = $meeting->todoItems;
-        $summary = $meeting->aiSummary?->summary ?? 'No summary generated.';
-        $todoLines = $todos->map(fn ($t) => "• {$t->title}" . ($t->assignee ? " → {$t->assignee->name}" : ''))->implode("\n");
-
-        $text = "*Meeting Ready: {$meeting->title}*\n\n{$summary}";
-        if ($todoLines) {
-            $text .= "\n\n*Action Items:*\n{$todoLines}";
-        }
-
-        Http::post($webhookUrl, ['text' => $text]);
+        return count($segments);
     }
 
-    private function resolveParticipantNames(): array
-    {
-        $this->meeting->loadMissing(['user', 'team.members']);
+    // ─── Transcription ───────────────────────────────────────────────────────
 
-        // Start with the uploader
-        $names = collect([$this->meeting->user->name]);
-
-        // Add team members if the meeting belongs to a team
-        if ($this->meeting->team) {
-            $names = $names->merge($this->meeting->team->members->pluck('name'));
-        }
-
-        return $names->unique()->values()->toArray();
-    }
-
-    private function transcribe(array $participantNames = []): string
+    /**
+     * Calls Gemini to transcribe audio and returns an array of timestamped segments.
+     * Each segment: ['start' => float, 'speaker' => string, 'text' => string]
+     */
+    private function transcribe(array $participantNames = []): array
     {
         $audioPath = Storage::disk('public')->path($this->meeting->audio_path);
         $mimeType  = $this->resolveMimeType($this->meeting->audio_path);
         $audioData = base64_encode(file_get_contents($audioPath));
 
-        $client = \Gemini::client(config('services.gemini.key'));
-
         $nameHint = count($participantNames) > 0
             ? 'The following people may be present: ' . implode(', ', $participantNames) . '. ' .
-              'Label each speaker by their actual name when you can identify them from audio or context. ' .
-              'If a speaker cannot be confidently identified, use generic labels (Speaker A, Speaker B, etc.).'
-            : 'If multiple speakers are present, add speaker labels (e.g. Speaker A:).';
+              'Label each speaker by their actual name when identifiable; otherwise use Speaker A, Speaker B, etc.'
+            : 'If multiple speakers are present, use Speaker A, Speaker B, etc.';
 
-        $response = $client->generativeModel(model: 'gemini-2.5-flash')
-            ->generateContent([
-                new Blob(mimeType: $mimeType, data: $audioData),
-                'Transcribe this audio recording accurately. ' . $nameHint . ' ' .
-                'Return only the transcript text with speaker labels, no commentary.',
-            ]);
+        $prompt = <<<PROMPT
+Transcribe this audio recording with timestamps. {$nameHint}
 
-        return $response->text();
+Return ONLY a valid JSON array — no markdown, no code fences, no commentary.
+Each element must follow this exact structure:
+{"start": <start time in seconds as a float>, "speaker": "<speaker name or Speaker A>", "text": "<spoken text>"}
+
+Example:
+[{"start": 0.0, "speaker": "Nigel", "text": "Good morning everyone."}, {"start": 4.2, "speaker": "Jefry", "text": "Morning! Let's get started."}]
+PROMPT;
+
+        $client   = \Gemini::client(config('services.gemini.key'));
+        $raw      = $client->generativeModel(model: 'gemini-2.5-flash')
+            ->generateContent([new Blob(mimeType: $mimeType, data: $audioData), $prompt])
+            ->text();
+
+        return $this->parseSegments($raw);
     }
 
-    private function mapSpeakers(string $transcript, array $participantNames): string
+    private function parseSegments(string $raw): array
     {
-        // Only run if there are generic Speaker labels to replace
-        if (! preg_match('/Speaker [A-Z]:/i', $transcript)) {
-            Log::info("ProcessMeetingJob [{$this->meeting->id}]: no generic speaker labels found, skipping mapSpeakers.");
-            return $transcript;
+        $json     = preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($raw));
+        $segments = json_decode($json, true);
+
+        if (! is_array($segments) || empty($segments)) {
+            Log::warning("ProcessMeetingJob [{$this->meeting->id}]: transcribe returned invalid JSON — wrapping as single segment.");
+            return [['start' => 0.0, 'speaker' => '', 'text' => trim($raw)]];
+        }
+
+        // Normalise keys
+        return array_map(fn ($s) => [
+            'start'   => (float) ($s['start']   ?? 0.0),
+            'speaker' => (string) ($s['speaker'] ?? ''),
+            'text'    => (string) ($s['text']    ?? ''),
+        ], $segments);
+    }
+
+    // ─── Speaker mapping ─────────────────────────────────────────────────────
+
+    /**
+     * Runs a second Gemini pass to replace generic labels with real participant names.
+     * Operates on the segments array (not raw text) for clean data.
+     */
+    private function mapSpeakers(array $segments, array $participantNames): array
+    {
+        $genericLabels = collect($segments)
+            ->pluck('speaker')
+            ->unique()
+            ->filter(fn ($s) => preg_match('/^Speaker [A-Z]$/i', $s))
+            ->values()
+            ->toArray();
+
+        if (empty($genericLabels)) {
+            Log::info("ProcessMeetingJob [{$this->meeting->id}]: no generic speaker labels — skipping mapSpeakers.");
+            return $segments;
         }
 
         $nameList = implode(', ', $participantNames);
-        $client   = \Gemini::client(config('services.gemini.key'));
+        $labelList = implode(', ', $genericLabels);
 
         $prompt = <<<PROMPT
-Below is a meeting transcript that uses generic speaker labels (Speaker A, Speaker B, etc.) and a list of known participants.
-
-Using context clues in the transcript (how people address each other, names mentioned, speaking style), map each generic speaker label to the most likely real participant name.
-
+A meeting transcript uses these generic speaker labels: {$labelList}
 Known participants: {$nameList}
 
-Respond with ONLY a valid JSON object — no markdown, no code fences, no commentary. Example:
-{"Speaker A": "Nigel", "Speaker B": "Jefry", "Speaker C": "Unknown"}
-
-If you cannot determine who a speaker is, use "Unknown" as the value.
-
-TRANSCRIPT:
-{$transcript}
+Using context clues (how people address each other, names mentioned), map each generic label to the most likely participant.
+Respond with ONLY a valid JSON object — no markdown, no code fences.
+Example: {"Speaker A": "Nigel", "Speaker B": "Jefry"}
+Use "Unknown" when you cannot determine the speaker.
 PROMPT;
 
-        $response = $client->generativeModel(model: 'gemini-2.5-flash')
-            ->generateContent([$prompt]);
+        $raw  = \Gemini::client(config('services.gemini.key'))
+            ->generativeModel(model: 'gemini-2.5-flash')
+            ->generateContent([$prompt . "\n\nFULL TRANSCRIPT:\n" . $this->segmentsToText($segments)])
+            ->text();
 
-        $raw  = $response->text();
         $json = preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($raw));
         $map  = json_decode($json, true);
 
         if (! is_array($map)) {
-            Log::warning("ProcessMeetingJob [{$this->meeting->id}]: mapSpeakers returned invalid JSON, using original transcript.");
-            return $transcript;
+            Log::warning("ProcessMeetingJob [{$this->meeting->id}]: mapSpeakers returned invalid JSON.");
+            return $segments;
         }
 
-        Log::info("ProcessMeetingJob [{$this->meeting->id}]: speaker map resolved", $map);
+        Log::info("ProcessMeetingJob [{$this->meeting->id}]: speaker map", $map);
 
-        // Replace "Speaker A:" → "Nigel:" etc., skip "Unknown" mappings
-        foreach ($map as $label => $name) {
-            if ($name !== 'Unknown' && ! empty($name)) {
-                $transcript = preg_replace('/\b' . preg_quote($label, '/') . ':/i', "{$name}:", $transcript);
+        return array_map(function ($seg) use ($map) {
+            $mapped = $map[$seg['speaker']] ?? null;
+            if ($mapped && $mapped !== 'Unknown') {
+                $seg['speaker'] = $mapped;
             }
-        }
-
-        return $transcript;
+            return $seg;
+        }, $segments);
     }
+
+    private function segmentsToText(array $segments): string
+    {
+        return collect($segments)
+            ->map(fn ($s) => "[{$s['start']}s] {$s['speaker']}: {$s['text']}")
+            ->implode("\n");
+    }
+
+    // ─── Summarisation (concurrent) ───────────────────────────────────────────
 
     private function summarize(string $transcript): void
     {
         $apiKey = config('services.gemini.key');
 
-        // Concurrent Gemini calls — summary and todos are independent
         [$summaryRaw, $todosRaw] = Concurrency::run([
             fn () => $this->callGeminiForSummary($transcript, $apiKey),
             fn () => $this->callGeminiForTodos($transcript, $apiKey),
         ]);
 
-        // Persist summary
         $summaryData = json_decode(
-            preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($summaryRaw)),
-            true
+            preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($summaryRaw)), true
         ) ?? [];
 
         AiSummary::create([
@@ -220,10 +228,8 @@ PROMPT;
             'raw_response' => $summaryRaw,
         ]);
 
-        // Persist todos
         $todos = json_decode(
-            preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($todosRaw)),
-            true
+            preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($todosRaw)), true
         ) ?? [];
 
         foreach ($todos as $todo) {
@@ -231,7 +237,6 @@ PROMPT;
             if (! empty($todo['assignee_name'])) {
                 $assignee = User::where('name', 'like', '%' . $todo['assignee_name'] . '%')->first();
             }
-
             TodoItem::create([
                 'meeting_id'  => $this->meeting->id,
                 'assigned_to' => $assignee?->id,
@@ -250,19 +255,13 @@ You are an expert meeting analyst. Analyse the following meeting transcript.
 Respond with ONLY a valid JSON object — no markdown, no code fences, no commentary.
 
 Required structure:
-{
-  "summary": "2-4 sentence overview of the meeting",
-  "key_points": ["point 1", "point 2", "point 3"]
-}
+{"summary": "2-4 sentence overview", "key_points": ["point 1", "point 2", "point 3"]}
 
 TRANSCRIPT:
 {$transcript}
 PROMPT;
-
-        return \Gemini::client($apiKey)
-            ->generativeModel(model: 'gemini-2.5-flash')
-            ->generateContent([$prompt])
-            ->text();
+        return \Gemini::client($apiKey)->generativeModel(model: 'gemini-2.5-flash')
+            ->generateContent([$prompt])->text();
     }
 
     private function callGeminiForTodos(string $transcript, string $apiKey): string
@@ -272,38 +271,65 @@ You are an expert meeting analyst. Extract all action items from the following m
 Respond with ONLY a valid JSON array — no markdown, no code fences, no commentary.
 
 Required structure:
-[
-  {
-    "title": "short action item title",
-    "description": "optional detail or context",
-    "assignee_name": "first name or full name of the person responsible, or empty string if unknown"
-  }
-]
+[{"title": "...", "description": "...", "assignee_name": "... or empty string"}]
 
 TRANSCRIPT:
 {$transcript}
 PROMPT;
+        return \Gemini::client($apiKey)->generativeModel(model: 'gemini-2.5-flash')
+            ->generateContent([$prompt])->text();
+    }
 
-        return \Gemini::client($apiKey)
-            ->generativeModel(model: 'gemini-2.5-flash')
-            ->generateContent([$prompt])
-            ->text();
+    // ─── Notifications ────────────────────────────────────────────────────────
+
+    private function sendNotifications(): void
+    {
+        $meeting = $this->meeting->load(['user', 'todoItems.assignee']);
+        Mail::to($meeting->user)->queue(new MeetingProcessedMail($meeting));
+        $meeting->todoItems
+            ->filter(fn ($t) => $t->assignee && $t->assignee->id !== $meeting->user_id)
+            ->groupBy('assigned_to')
+            ->each(fn ($todos) => Mail::to($todos->first()->assignee)->queue(new TodoAssignedMail($todos->first())));
+        $this->notifySlack($meeting);
+    }
+
+    private function notifySlack($meeting): void
+    {
+        $webhookUrl = $meeting->user->slack_webhook_url;
+        if (! $webhookUrl) return;
+        $summary   = $meeting->aiSummary?->summary ?? 'No summary generated.';
+        $todoLines = $meeting->todoItems->map(fn ($t) => "• {$t->title}" . ($t->assignee ? " → {$t->assignee->name}" : ''))->implode("\n");
+        $text = "*Meeting Ready: {$meeting->title}*\n\n{$summary}";
+        if ($todoLines) $text .= "\n\n*Action Items:*\n{$todoLines}";
+        Http::post($webhookUrl, ['text' => $text]);
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    private function resolveParticipantNames(): array
+    {
+        $this->meeting->loadMissing(['user', 'team.members']);
+        $names = collect([$this->meeting->user->name]);
+        if ($this->meeting->team) {
+            $names = $names->merge($this->meeting->team->members->pluck('name'));
+        }
+        return $names->unique()->values()->toArray();
     }
 
     private function resolveMimeType(string $path): MimeType
     {
         return match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
-            'wav'         => MimeType::AUDIO_WAV,
-            'm4a'         => MimeType::AUDIO_AAC,
-            'ogg'         => MimeType::AUDIO_OGG,
-            'flac'        => MimeType::AUDIO_FLAC,
-            default       => MimeType::AUDIO_MP3,
+            'wav'  => MimeType::AUDIO_WAV,
+            'm4a'  => MimeType::AUDIO_AAC,
+            'ogg'  => MimeType::AUDIO_OGG,
+            'flac' => MimeType::AUDIO_FLAC,
+            default => MimeType::AUDIO_MP3,
         };
     }
 
     public function failed(\Throwable $e): void
     {
-        $this->meeting->update(['status' => 'failed']);
+        $this->meeting->update(['status' => 'failed', 'processing_stage' => null]);
         Log::error("ProcessMeetingJob [{$this->meeting->id}]: failed — {$e->getMessage()}");
     }
 }

@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Head, Link, router, usePage } from '@inertiajs/react';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
+
+// ─── Status badge ──────────────────────────────────────────────────────────
 
 const STATUS_STYLES = {
     pending:    'bg-gray-100 text-gray-600',
@@ -17,23 +19,175 @@ function StatusBadge({ status }) {
     );
 }
 
+// ─── Multi-stage status machine ────────────────────────────────────────────
+
+const STAGES = [
+    { key: 'transcribing',     label: 'Transcribing audio' },
+    { key: 'mapping_speakers', label: 'Identifying speakers' },
+    { key: 'summarizing',      label: 'Generating AI insights' },
+];
+
+function StageTracker({ status, processingStage }) {
+    const currentIdx = STAGES.findIndex(s => s.key === processingStage);
+    const isPending  = status === 'pending';
+
+    return (
+        <div className="rounded-lg bg-yellow-50 p-5 ring-1 ring-yellow-200">
+            <div className="flex items-center gap-2 mb-4">
+                <svg className="h-4 w-4 animate-spin text-yellow-500" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+                </svg>
+                <p className="text-sm font-semibold text-yellow-800">
+                    {isPending ? 'Waiting in queue…' : 'Processing your meeting…'}
+                </p>
+            </div>
+
+            <div className="space-y-2.5 pl-1">
+                {STAGES.map((stage, i) => {
+                    const isDone   = !isPending && currentIdx > i;
+                    const isActive = !isPending && currentIdx === i;
+                    return (
+                        <div
+                            key={stage.key}
+                            className={`flex items-center gap-3 text-sm transition-all duration-500 ${
+                                isDone   ? 'text-green-700'  :
+                                isActive ? 'text-yellow-900 font-medium' :
+                                           'text-gray-400'
+                            }`}
+                        >
+                            {isDone ? (
+                                /* Checkmark */
+                                <svg className="h-4 w-4 shrink-0 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                </svg>
+                            ) : isActive ? (
+                                /* Mini spinner */
+                                <svg className="h-4 w-4 shrink-0 animate-spin text-yellow-500" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+                                </svg>
+                            ) : (
+                                /* Empty circle */
+                                <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                    <circle cx="12" cy="12" r="9" />
+                                </svg>
+                            )}
+                            {stage.label}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
+// ─── Audio ↔ Transcript sync ───────────────────────────────────────────────
+
+function formatTime(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function AudioTranscriptSync({ audioUrl, segments }) {
+    const audioRef  = useRef(null);
+    const segRefs   = useRef({});
+    const [currentTime, setCurrentTime] = useState(0);
+    const [isPlaying, setIsPlaying]     = useState(false);
+
+    // Find the segment currently being spoken
+    const activeIdx = useMemo(() => {
+        for (let i = segments.length - 1; i >= 0; i--) {
+            if (currentTime >= segments[i].start) return i;
+        }
+        return 0;
+    }, [currentTime, segments]);
+
+    // Auto-scroll to keep active segment visible
+    useEffect(() => {
+        const el = segRefs.current[activeIdx];
+        if (el && isPlaying) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }, [activeIdx, isPlaying]);
+
+    const seek = (startTime) => {
+        if (!audioRef.current) return;
+        audioRef.current.currentTime = startTime;
+        audioRef.current.play();
+        setIsPlaying(true);
+    };
+
+    return (
+        <div className="space-y-4">
+            {/* Audio player */}
+            <audio
+                ref={audioRef}
+                controls
+                className="w-full rounded"
+                onTimeUpdate={e => setCurrentTime(e.target.currentTime)}
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+            >
+                <source src={audioUrl} />
+            </audio>
+
+            <p className="text-xs text-gray-400">
+                Click any segment to jump to that point in the recording.
+            </p>
+
+            {/* Synced transcript */}
+            <div className="max-h-96 overflow-y-auto rounded-md border border-gray-100 bg-gray-50">
+                {segments.map((seg, i) => {
+                    const isActive = i === activeIdx && isPlaying;
+                    return (
+                        <button
+                            key={i}
+                            ref={el => segRefs.current[i] = el}
+                            onClick={() => seek(seg.start)}
+                            className={`w-full text-left px-4 py-2.5 border-b border-gray-100 last:border-0 transition-colors duration-150 group ${
+                                isActive ? 'bg-yellow-50' : 'hover:bg-white'
+                            }`}
+                        >
+                            <div className="flex items-baseline gap-2">
+                                {seg.speaker && (
+                                    <span className={`shrink-0 text-xs font-semibold ${
+                                        isActive ? 'text-indigo-600' : 'text-indigo-400 group-hover:text-indigo-500'
+                                    }`}>
+                                        {seg.speaker}
+                                    </span>
+                                )}
+                                <span className={`text-sm leading-relaxed ${
+                                    isActive ? 'text-gray-900 font-medium' : 'text-gray-700'
+                                }`}>
+                                    {seg.text}
+                                </span>
+                                <span className="ml-auto shrink-0 text-xs text-gray-300 group-hover:text-gray-400">
+                                    {formatTime(seg.start)}
+                                </span>
+                            </div>
+                        </button>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
+// ─── Optimistic todo row ───────────────────────────────────────────────────
+
 function TodoRow({ todo: initial }) {
     const [todo, setTodo] = useState(initial);
 
     const toggle = () => {
         const next = todo.status === 'completed' ? 'pending' : 'completed';
         const prev = todo.status;
-
-        // Optimistic update — instant visual feedback
         setTodo(t => ({ ...t, status: next }));
-
         router.patch(
             route('todo-items.update', todo.id),
             { status: next },
-            {
-                preserveScroll: true,
-                onError: () => setTodo(t => ({ ...t, status: prev })), // rollback on failure
-            },
+            { preserveScroll: true, onError: () => setTodo(t => ({ ...t, status: prev })) },
         );
     };
 
@@ -44,9 +198,8 @@ function TodoRow({ todo: initial }) {
             <button
                 onClick={toggle}
                 className={`mt-0.5 h-5 w-5 shrink-0 rounded border-2 transition-all duration-200 ${
-                    done
-                        ? 'border-green-500 bg-green-500 text-white scale-110'
-                        : 'border-gray-300 bg-white hover:border-indigo-400 hover:scale-110'
+                    done ? 'border-green-500 bg-green-500 text-white scale-110'
+                         : 'border-gray-300 bg-white hover:border-indigo-400 hover:scale-110'
                 }`}
                 aria-label="Toggle task"
             >
@@ -60,22 +213,20 @@ function TodoRow({ todo: initial }) {
                 <p className={`text-sm font-medium transition-all duration-200 ${done ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
                     {todo.title}
                 </p>
-                {todo.description && (
-                    <p className="mt-0.5 text-xs text-gray-500">{todo.description}</p>
-                )}
-                {todo.assignee && (
-                    <p className="mt-1 text-xs text-indigo-600">→ {todo.assignee.name}</p>
-                )}
+                {todo.description && <p className="mt-0.5 text-xs text-gray-500">{todo.description}</p>}
+                {todo.assignee && <p className="mt-1 text-xs text-indigo-600">→ {todo.assignee.name}</p>}
             </div>
         </li>
     );
 }
 
+// ─── Page ──────────────────────────────────────────────────────────────────
+
 export default function Show({ meeting }) {
-    const { props } = usePage();
-    const audioUrl = meeting.audio_path ? `/storage/${meeting.audio_path}` : null;
-    const isProcessing = meeting.status === 'pending' || meeting.status === 'processing';
-    const shareUrl = meeting.share_token ? `${window.location.origin}/share/${meeting.share_token}` : null;
+    const audioUrl       = meeting.audio_path ? `/storage/${meeting.audio_path}` : null;
+    const isProcessing   = meeting.status === 'pending' || meeting.status === 'processing';
+    const segments       = meeting.transcript?.segments ?? null;
+    const shareUrl       = meeting.share_token ? `${window.location.origin}/share/${meeting.share_token}` : null;
     const [copied, setCopied] = useState(false);
 
     const copyShareUrl = (url) => {
@@ -84,6 +235,7 @@ export default function Show({ meeting }) {
         setTimeout(() => setCopied(false), 2000);
     };
 
+    // Poll every 3s while processing
     useEffect(() => {
         if (!isProcessing) return;
         const id = setInterval(() => router.reload({ only: ['meeting'] }), 3000);
@@ -102,35 +254,24 @@ export default function Show({ meeting }) {
                         {meeting.status === 'completed' && (
                             <>
                                 {shareUrl ? (
-                                    <button
-                                        onClick={() => copyShareUrl(shareUrl)}
-                                        className="inline-flex items-center gap-1.5 rounded-md bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-200"
-                                    >
+                                    <button onClick={() => copyShareUrl(shareUrl)}
+                                        className="rounded-md bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-200">
                                         {copied ? '✓ Copied!' : '🔗 Copy Link'}
                                     </button>
                                 ) : (
-                                    <button
-                                        onClick={() => router.post(route('meetings.share.generate', meeting.id))}
-                                        className="inline-flex items-center gap-1.5 rounded-md bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-200"
-                                    >
+                                    <button onClick={() => router.post(route('meetings.share.generate', meeting.id))}
+                                        className="rounded-md bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-200">
                                         Share
                                     </button>
                                 )}
-                                <a
-                                    href={route('meetings.export', meeting.id)}
-                                    className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500"
-                                    target="_blank"
-                                >
+                                <a href={route('meetings.export', meeting.id)} target="_blank"
+                                    className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500">
                                     Export PDF
                                 </a>
                             </>
                         )}
-                        <Link href={route('meetings.edit', meeting.id)} className="text-sm font-medium text-gray-600 hover:text-gray-900">
-                            Edit
-                        </Link>
-                        <Link href={route('meetings.index')} className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
-                            ← My Meetings
-                        </Link>
+                        <Link href={route('meetings.edit', meeting.id)} className="text-sm font-medium text-gray-600 hover:text-gray-900">Edit</Link>
+                        <Link href={route('meetings.index')} className="text-sm font-medium text-indigo-600 hover:text-indigo-500">← My Meetings</Link>
                     </div>
                 </div>
             }
@@ -148,52 +289,46 @@ export default function Show({ meeting }) {
                         {meeting.description && (
                             <p className="mt-2 text-sm text-gray-600">{meeting.description}</p>
                         )}
-                        {audioUrl && (
+                        {/* Audio player shown here only when there are no synced segments */}
+                        {audioUrl && !segments && (
                             <div className="mt-4">
                                 <p className="mb-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Recording</p>
-                                <audio controls className="w-full rounded">
-                                    <source src={audioUrl} />
-                                </audio>
+                                <audio controls className="w-full rounded"><source src={audioUrl} /></audio>
                             </div>
                         )}
                     </div>
 
-                    {/* Processing banner */}
+                    {/* Multi-stage status machine */}
                     {isProcessing && (
-                        <div className="flex items-center gap-3 rounded-lg bg-yellow-50 p-4 ring-1 ring-yellow-200">
-                            <svg className="h-5 w-5 animate-spin text-yellow-500" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
-                            </svg>
-                            <p className="text-sm text-yellow-800">
-                                {meeting.status === 'processing'
-                                    ? 'AI is processing your recording — this may take a few minutes.'
-                                    : 'Waiting in queue to be processed…'}
-                            </p>
-                        </div>
+                        <StageTracker
+                            status={meeting.status}
+                            processingStage={meeting.processing_stage}
+                        />
                     )}
 
                     {meeting.status === 'failed' && (
                         <div className="flex items-center justify-between rounded-lg bg-red-50 p-4 ring-1 ring-red-200">
                             <p className="text-sm text-red-700">Processing failed. You can retry or re-upload the recording.</p>
-                            <button
-                                onClick={() => router.post(route('meetings.retry', meeting.id))}
-                                className="ml-4 shrink-0 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-500"
-                            >
+                            <button onClick={() => router.post(route('meetings.retry', meeting.id))}
+                                className="ml-4 shrink-0 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-500">
                                 Retry
                             </button>
                         </div>
                     )}
 
-                    {/* Transcript */}
+                    {/* Transcript — synced if segments available, plain text otherwise */}
                     <div className="rounded-lg bg-white p-6 shadow-sm ring-1 ring-gray-200">
-                        <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-500">Transcript</h3>
+                        <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-4">Transcript</h3>
                         {meeting.transcript ? (
-                            <pre className="mt-3 max-h-96 overflow-y-auto whitespace-pre-wrap text-sm text-gray-700 leading-relaxed font-sans">
-                                {meeting.transcript.content}
-                            </pre>
+                            segments?.length > 0 ? (
+                                <AudioTranscriptSync audioUrl={audioUrl} segments={segments} />
+                            ) : (
+                                <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap text-sm text-gray-700 leading-relaxed font-sans">
+                                    {meeting.transcript.content}
+                                </pre>
+                            )
                         ) : (
-                            <p className="mt-3 text-sm text-gray-400 italic">
+                            <p className="text-sm text-gray-400 italic">
                                 {isProcessing ? 'Being transcribed…' : 'No transcript yet.'}
                             </p>
                         )}
@@ -238,9 +373,7 @@ export default function Show({ meeting }) {
                         </h3>
                         {meeting.todo_items?.length > 0 ? (
                             <ul className="mt-2 divide-y divide-gray-100">
-                                {meeting.todo_items.map((todo) => (
-                                    <TodoRow key={todo.id} todo={todo} />
-                                ))}
+                                {meeting.todo_items.map(todo => <TodoRow key={todo.id} todo={todo} />)}
                             </ul>
                         ) : (
                             <p className="mt-3 text-sm text-gray-400 italic">
