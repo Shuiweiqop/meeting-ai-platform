@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Head, Link, router, usePage } from '@inertiajs/react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
+import { useAudioStore } from '@/stores/audioStore';
 
 // ─── Status badge ──────────────────────────────────────────────────────────
 
@@ -85,18 +87,33 @@ function StageTracker({ status, processingStage }) {
 // ─── Audio ↔ Transcript sync ───────────────────────────────────────────────
 
 function formatTime(seconds) {
+    if (!seconds || isNaN(seconds)) return '0:00';
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
     return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function AudioTranscriptSync({ audioUrl, segments }) {
-    const audioRef  = useRef(null);
-    const segRefs   = useRef({});
-    const [currentTime, setCurrentTime] = useState(0);
-    const [isPlaying, setIsPlaying]     = useState(false);
+/**
+ * Synced transcript — powered by the global Zustand audio store.
+ * The <audio> element lives in GlobalAudioPlayer (AuthenticatedLayout).
+ * Virtual list renders only ~10 segments at a time regardless of transcript length.
+ */
+function AudioTranscriptSync({ meeting, segments }) {
+    const scrollRef = useRef(null);
 
-    // Find the segment currently being spoken
+    const { currentTime, isPlaying, seekTo, setIsPlaying, load } = useAudioStore();
+
+    // Register this meeting in the global player on mount
+    useEffect(() => {
+        load({
+            meetingId:    meeting.id,
+            meetingTitle: meeting.title,
+            meetingHref:  route('meetings.show', meeting.id),
+            audioUrl:     `/storage/${meeting.audio_path}`,
+        });
+    }, [meeting.id]);
+
+    // Active segment: last segment whose start ≤ currentTime
     const activeIdx = useMemo(() => {
         for (let i = segments.length - 1; i >= 0; i--) {
             if (currentTime >= segments[i].start) return i;
@@ -104,72 +121,80 @@ function AudioTranscriptSync({ audioUrl, segments }) {
         return 0;
     }, [currentTime, segments]);
 
-    // Auto-scroll to keep active segment visible
+    // Virtual list — only renders visible rows
+    const virtualizer = useVirtualizer({
+        count:           segments.length,
+        getScrollElement: () => scrollRef.current,
+        estimateSize:    () => 64,
+        overscan:        5,
+    });
+
+    // Auto-scroll to active segment while playing
     useEffect(() => {
-        const el = segRefs.current[activeIdx];
-        if (el && isPlaying) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        if (isPlaying && activeIdx >= 0) {
+            virtualizer.scrollToIndex(activeIdx, { behavior: 'smooth', align: 'nearest' });
         }
     }, [activeIdx, isPlaying]);
 
     const seek = (startTime) => {
-        if (!audioRef.current) return;
-        audioRef.current.currentTime = startTime;
-        audioRef.current.play();
+        seekTo(startTime);
         setIsPlaying(true);
     };
 
     return (
-        <div className="space-y-4">
-            {/* Audio player */}
-            <audio
-                ref={audioRef}
-                controls
-                className="w-full rounded"
-                onTimeUpdate={e => setCurrentTime(e.target.currentTime)}
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-            >
-                <source src={audioUrl} />
-            </audio>
-
+        <div className="space-y-3">
             <p className="text-xs text-gray-400">
-                Click any segment to jump to that point in the recording.
+                Click any segment to jump to that point · Audio plays in the bottom bar
             </p>
 
-            {/* Synced transcript */}
-            <div className="max-h-96 overflow-y-auto rounded-md border border-gray-100 bg-gray-50">
-                {segments.map((seg, i) => {
-                    const isActive = i === activeIdx && isPlaying;
-                    return (
-                        <button
-                            key={i}
-                            ref={el => segRefs.current[i] = el}
-                            onClick={() => seek(seg.start)}
-                            className={`w-full text-left px-4 py-2.5 border-b border-gray-100 last:border-0 transition-colors duration-150 group ${
-                                isActive ? 'bg-yellow-50' : 'hover:bg-white'
-                            }`}
-                        >
-                            <div className="flex items-baseline gap-2">
-                                {seg.speaker && (
-                                    <span className={`shrink-0 text-xs font-semibold ${
-                                        isActive ? 'text-indigo-600' : 'text-indigo-400 group-hover:text-indigo-500'
+            {/* Virtual scroll container */}
+            <div
+                ref={scrollRef}
+                className="h-96 overflow-y-auto rounded-md border border-gray-100 bg-gray-50"
+            >
+                <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
+                    {virtualizer.getVirtualItems().map((virtualItem) => {
+                        const seg      = segments[virtualItem.index];
+                        const isActive = virtualItem.index === activeIdx && isPlaying;
+
+                        return (
+                            <button
+                                key={virtualItem.key}
+                                data-index={virtualItem.index}
+                                ref={virtualizer.measureElement}
+                                onClick={() => seek(seg.start)}
+                                style={{
+                                    position: 'absolute',
+                                    top:      0,
+                                    left:     0,
+                                    width:    '100%',
+                                    transform: `translateY(${virtualItem.start}px)`,
+                                }}
+                                className={`w-full text-left px-4 py-2.5 border-b border-gray-100 transition-colors duration-150 group ${
+                                    isActive ? 'bg-yellow-50' : 'hover:bg-white'
+                                }`}
+                            >
+                                <div className="flex items-baseline gap-2">
+                                    {seg.speaker && (
+                                        <span className={`shrink-0 text-xs font-semibold ${
+                                            isActive ? 'text-indigo-600' : 'text-indigo-400 group-hover:text-indigo-500'
+                                        }`}>
+                                            {seg.speaker}
+                                        </span>
+                                    )}
+                                    <span className={`text-sm leading-relaxed ${
+                                        isActive ? 'text-gray-900 font-medium' : 'text-gray-700'
                                     }`}>
-                                        {seg.speaker}
+                                        {seg.text}
                                     </span>
-                                )}
-                                <span className={`text-sm leading-relaxed ${
-                                    isActive ? 'text-gray-900 font-medium' : 'text-gray-700'
-                                }`}>
-                                    {seg.text}
-                                </span>
-                                <span className="ml-auto shrink-0 text-xs text-gray-300 group-hover:text-gray-400">
-                                    {formatTime(seg.start)}
-                                </span>
-                            </div>
-                        </button>
-                    );
-                })}
+                                    <span className="ml-auto shrink-0 text-xs text-gray-300 group-hover:text-gray-400">
+                                        {formatTime(seg.start)}
+                                    </span>
+                                </div>
+                            </button>
+                        );
+                    })}
+                </div>
             </div>
         </div>
     );
@@ -321,7 +346,7 @@ export default function Show({ meeting }) {
                         <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-4">Transcript</h3>
                         {meeting.transcript ? (
                             segments?.length > 0 ? (
-                                <AudioTranscriptSync audioUrl={audioUrl} segments={segments} />
+                                <AudioTranscriptSync meeting={meeting} segments={segments} />
                             ) : (
                                 <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap text-sm text-gray-700 leading-relaxed font-sans">
                                     {meeting.transcript.content}
