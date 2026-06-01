@@ -260,12 +260,25 @@ export default function Show({ meeting }) {
         setTimeout(() => setCopied(false), 2000);
     };
 
-    // Poll every 3s while processing
+    // Reverb WebSocket — reload only when backend broadcasts a status change
     useEffect(() => {
         if (!isProcessing) return;
-        const id = setInterval(() => router.reload({ only: ['meeting'] }), 3000);
-        return () => clearInterval(id);
-    }, [isProcessing]);
+
+        const channel = window.Echo
+            .private(`meetings.${meeting.id}`)
+            .listen('.MeetingStatusUpdated', () => {
+                router.reload({ only: ['meeting'] });
+            });
+
+        // Fallback: also poll every 15s in case WebSocket drops
+        const fallback = setInterval(() => router.reload({ only: ['meeting'] }), 15000);
+
+        return () => {
+            channel.stopListening('.MeetingStatusUpdated');
+            window.Echo.leave(`meetings.${meeting.id}`);
+            clearInterval(fallback);
+        };
+    }, [isProcessing, meeting.id]);
 
     return (
         <AuthenticatedLayout

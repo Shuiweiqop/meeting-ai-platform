@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Events\MeetingStatusUpdated;
 use App\Mail\MeetingProcessedMail;
 use App\Mail\TodoAssignedMail;
 use App\Models\AiSummary;
@@ -73,6 +74,7 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
         Log::info("ProcessMeetingJob [{$this->meeting->id}]: summary + todos saved.");
 
         $this->meeting->update(['status' => 'completed', 'processing_stage' => null]);
+        broadcast(new MeetingStatusUpdated($this->meeting));
         Log::info("ProcessMeetingJob [{$this->meeting->id}]: done.");
 
         $this->sendNotifications();
@@ -81,6 +83,7 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
     private function updateStage(string $stage): void
     {
         $this->meeting->update(['processing_stage' => $stage]);
+        broadcast(new MeetingStatusUpdated($this->meeting))->toOthers();
     }
 
     private function countSegments(array $segments): int
@@ -330,6 +333,7 @@ PROMPT;
     public function failed(\Throwable $e): void
     {
         $this->meeting->update(['status' => 'failed', 'processing_stage' => null]);
+        broadcast(new MeetingStatusUpdated($this->meeting));
         Log::error("ProcessMeetingJob [{$this->meeting->id}]: failed — {$e->getMessage()}");
     }
 }

@@ -11,6 +11,7 @@
         "google-gemini-php/client": "^2.7",
         "inertiajs/inertia-laravel": "^2.0",
         "laravel/framework": "^13.8",
+        "laravel/reverb": "^1.0",
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^3.0",
         "php-ffmpeg/php-ffmpeg": "^1.4",
