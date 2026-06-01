@@ -14,7 +14,10 @@ class MeetingStatusUpdated implements ShouldBroadcast
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
-    public function __construct(public readonly Meeting $meeting) {}
+    public function __construct(
+        public readonly Meeting $meeting,
+        public readonly ?int $extractionProgress = null,
+    ) {}
 
     public function broadcastOn(): array
     {
@@ -24,8 +27,9 @@ class MeetingStatusUpdated implements ShouldBroadcast
     public function broadcastWith(): array
     {
         return [
-            'status'           => $this->meeting->status,
-            'processing_stage' => $this->meeting->processing_stage,
+            'status'              => $this->meeting->status,
+            'processing_stage'    => $this->meeting->processing_stage,
+            'extraction_progress' => $this->extractionProgress,
         ];
     }
 

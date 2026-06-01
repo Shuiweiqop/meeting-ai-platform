@@ -10,6 +10,8 @@ use App\Models\Meeting;
 use App\Models\TodoItem;
 use App\Models\Transcript;
 use App\Models\User;
+use FFMpeg\FFMpeg;
+use FFMpeg\Format\Audio\Mp3 as Mp3Format;
 use Gemini\Data\Blob;
 use Gemini\Enums\MimeType;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -25,9 +27,11 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
 {
     use Queueable;
 
-    public int $tries   = 3;
-    public int $timeout = 600;
+    public int $tries     = 3;
+    public int $timeout   = 600;
     public int $uniqueFor = 3600;
+
+    private ?string $extractedAudioPath = null;
 
     public function __construct(public readonly Meeting $meeting) {}
 
@@ -43,9 +47,13 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
 
         $participantNames = $this->resolveParticipantNames();
 
+        // Stage 0: Normalize audio via FFmpeg (handles video→audio too)
+        $this->updateStage('extracting_audio');
+        $audioStoragePath = $this->extractAudio();
+
         // Stage 1: Transcribe audio → timestamped segments
         $this->updateStage('transcribing');
-        $segments = $this->transcribe($participantNames);
+        $segments = $this->transcribe($participantNames, $audioStoragePath);
 
         // Stage 2: Map generic "Speaker A" labels to real names
         $this->updateStage('mapping_speakers');
@@ -77,6 +85,7 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
         broadcast(new MeetingStatusUpdated($this->meeting));
         Log::info("ProcessMeetingJob [{$this->meeting->id}]: done.");
 
+        $this->cleanupExtractedAudio();
         $this->sendNotifications();
     }
 
@@ -84,6 +93,41 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
     {
         $this->meeting->update(['processing_stage' => $stage]);
         broadcast(new MeetingStatusUpdated($this->meeting));
+    }
+
+    // ─── Audio extraction ─────────────────────────────────────────────────────
+
+    private function extractAudio(): string
+    {
+        $sourcePath   = Storage::disk('public')->path($this->meeting->audio_path);
+        $relativePath = 'meetings/tmp_' . $this->meeting->id . '.mp3';
+        $outputPath   = Storage::disk('public')->path($relativePath);
+
+        $format  = new Mp3Format();
+        $lastPct = -1;
+
+        $format->on('progress', function ($media, $format, $percentage) use (&$lastPct) {
+            $pct = (int) $percentage;
+            if ($pct - $lastPct >= 5) {
+                $lastPct = $pct;
+                broadcast(new MeetingStatusUpdated($this->meeting, $pct));
+            }
+        });
+
+        FFMpeg::create()->open($sourcePath)->save($format, $outputPath);
+
+        $this->extractedAudioPath = $relativePath;
+        Log::info("ProcessMeetingJob [{$this->meeting->id}]: audio extracted → {$relativePath}");
+
+        return $relativePath;
+    }
+
+    private function cleanupExtractedAudio(): void
+    {
+        if ($this->extractedAudioPath) {
+            Storage::disk('public')->delete($this->extractedAudioPath);
+            $this->extractedAudioPath = null;
+        }
     }
 
     private function countSegments(array $segments): int
@@ -97,10 +141,11 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
      * Calls Gemini to transcribe audio and returns an array of timestamped segments.
      * Each segment: ['start' => float, 'speaker' => string, 'text' => string]
      */
-    private function transcribe(array $participantNames = []): array
+    private function transcribe(array $participantNames = [], ?string $audioStoragePath = null): array
     {
-        $audioPath = Storage::disk('public')->path($this->meeting->audio_path);
-        $mimeType  = $this->resolveMimeType($this->meeting->audio_path);
+        $storagePath = $audioStoragePath ?? $this->meeting->audio_path;
+        $audioPath   = Storage::disk('public')->path($storagePath);
+        $mimeType    = $this->resolveMimeType($storagePath);
         $audioData = base64_encode(file_get_contents($audioPath));
 
         $nameHint = count($participantNames) > 0
@@ -332,6 +377,7 @@ PROMPT;
 
     public function failed(\Throwable $e): void
     {
+        $this->cleanupExtractedAudio();
         $this->meeting->update(['status' => 'failed', 'processing_stage' => null]);
         broadcast(new MeetingStatusUpdated($this->meeting));
         Log::error("ProcessMeetingJob [{$this->meeting->id}]: failed — {$e->getMessage()}");

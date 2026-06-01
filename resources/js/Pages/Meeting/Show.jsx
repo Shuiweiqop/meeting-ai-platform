@@ -24,12 +24,13 @@ function StatusBadge({ status }) {
 // ─── Multi-stage status machine ────────────────────────────────────────────
 
 const STAGES = [
+    { key: 'extracting_audio', label: 'Extracting audio' },
     { key: 'transcribing',     label: 'Transcribing audio' },
     { key: 'mapping_speakers', label: 'Identifying speakers' },
     { key: 'summarizing',      label: 'Generating AI insights' },
 ];
 
-function StageTracker({ status, processingStage }) {
+function StageTracker({ status, processingStage, extractionProgress }) {
     const currentIdx = STAGES.findIndex(s => s.key === processingStage);
     const isPending  = status === 'pending';
 
@@ -49,33 +50,41 @@ function StageTracker({ status, processingStage }) {
                 {STAGES.map((stage, i) => {
                     const isDone   = !isPending && currentIdx > i;
                     const isActive = !isPending && currentIdx === i;
+                    const showBar  = isActive && stage.key === 'extracting_audio' && extractionProgress != null;
                     return (
                         <div
                             key={stage.key}
-                            className={`flex items-center gap-3 text-sm transition-all duration-500 ${
+                            className={`flex items-start gap-3 text-sm transition-all duration-500 ${
                                 isDone   ? 'text-green-700'  :
                                 isActive ? 'text-yellow-900 font-medium' :
                                            'text-gray-400'
                             }`}
                         >
                             {isDone ? (
-                                /* Checkmark */
-                                <svg className="h-4 w-4 shrink-0 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                <svg className="mt-0.5 h-4 w-4 shrink-0 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                                 </svg>
                             ) : isActive ? (
-                                /* Mini spinner */
-                                <svg className="h-4 w-4 shrink-0 animate-spin text-yellow-500" fill="none" viewBox="0 0 24 24">
+                                <svg className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-yellow-500" fill="none" viewBox="0 0 24 24">
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
                                 </svg>
                             ) : (
-                                /* Empty circle */
-                                <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                <svg className="mt-0.5 h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                                     <circle cx="12" cy="12" r="9" />
                                 </svg>
                             )}
-                            {stage.label}
+                            <div className="flex-1 min-w-0">
+                                <span>{stage.label}</span>
+                                {showBar && (
+                                    <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-yellow-200">
+                                        <div
+                                            className="h-1.5 rounded-full bg-yellow-500 transition-all duration-300"
+                                            style={{ width: `${extractionProgress}%` }}
+                                        />
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     );
                 })}
@@ -252,7 +261,8 @@ export default function Show({ meeting }) {
     const isProcessing   = meeting.status === 'pending' || meeting.status === 'processing';
     const segments       = meeting.transcript?.segments ?? null;
     const shareUrl       = meeting.share_token ? `${window.location.origin}/share/${meeting.share_token}` : null;
-    const [copied, setCopied] = useState(false);
+    const [copied, setCopied]                   = useState(false);
+    const [extractionProgress, setExtractionProgress] = useState(null);
 
     const copyShareUrl = (url) => {
         navigator.clipboard.writeText(url);
@@ -260,14 +270,20 @@ export default function Show({ meeting }) {
         setTimeout(() => setCopied(false), 2000);
     };
 
-    // Reverb WebSocket — reload only when backend broadcasts a status change
+    // Reverb WebSocket — update extraction progress bar in-place;
+    // only trigger a full reload when the stage/status actually changes.
     useEffect(() => {
         if (!isProcessing) return;
 
         const channel = window.Echo
             .private(`meetings.${meeting.id}`)
-            .listen('.MeetingStatusUpdated', () => {
-                router.reload({ only: ['meeting'] });
+            .listen('.MeetingStatusUpdated', (e) => {
+                if (e.extraction_progress != null) {
+                    setExtractionProgress(e.extraction_progress);
+                } else {
+                    setExtractionProgress(null);
+                    router.reload({ only: ['meeting'] });
+                }
             });
 
         // Fallback: also poll every 15s in case WebSocket drops
@@ -341,6 +357,7 @@ export default function Show({ meeting }) {
                         <StageTracker
                             status={meeting.status}
                             processingStage={meeting.processing_stage}
+                            extractionProgress={extractionProgress}
                         />
                     )}
 
