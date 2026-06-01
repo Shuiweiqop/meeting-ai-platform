@@ -83,7 +83,7 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
     private function updateStage(string $stage): void
     {
         $this->meeting->update(['processing_stage' => $stage]);
-        broadcast(new MeetingStatusUpdated($this->meeting))->toOthers();
+        broadcast(new MeetingStatusUpdated($this->meeting));
     }
 
     private function countSegments(array $segments): int
