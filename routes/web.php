@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ChunkUploadController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\SharedMeetingController;
 use App\Http\Controllers\MeetingController;
@@ -31,6 +32,9 @@ Route::middleware('auth')->group(function () {
     Route::post('/meetings/{meeting}/retry', [MeetingController::class, 'retry'])->name('meetings.retry');
     Route::post('/meetings/{meeting}/share', [SharedMeetingController::class, 'generate'])->name('meetings.share.generate');
     Route::delete('/meetings/{meeting}/share', [SharedMeetingController::class, 'revoke'])->name('meetings.share.revoke');
+    Route::post('/upload/chunk', [ChunkUploadController::class, 'chunk'])->name('upload.chunk');
+    Route::post('/upload/merge', [ChunkUploadController::class, 'merge'])->name('upload.merge');
+
     Route::get('/todos', [TodoItemController::class, 'index'])->name('todos.index');
     Route::patch('/todo-items/{todoItem}', [TodoItemController::class, 'update'])->name('todo-items.update');
 
