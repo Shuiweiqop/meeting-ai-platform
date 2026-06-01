@@ -102,6 +102,20 @@ function formatTime(seconds) {
     return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+function escapeRegex(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function highlightText(text, query) {
+    if (!query.trim()) return text;
+    const re = new RegExp(`(${escapeRegex(query)})`, 'gi');
+    return text.split(re).map((part, i) =>
+        i % 2 === 1
+            ? <mark key={i} className="rounded-sm bg-yellow-200 px-0.5 text-gray-900">{part}</mark>
+            : part
+    );
+}
+
 /**
  * Synced transcript — powered by the global Zustand audio store.
  * The <audio> element lives in GlobalAudioPlayer (AuthenticatedLayout).
@@ -109,6 +123,8 @@ function formatTime(seconds) {
  */
 function AudioTranscriptSync({ meeting, segments }) {
     const scrollRef = useRef(null);
+    const [query,    setQuery]    = useState('');
+    const [matchIdx, setMatchIdx] = useState(0);
 
     const { currentTime, isPlaying, seekTo, setIsPlaying, load } = useAudioStore();
 
@@ -130,13 +146,34 @@ function AudioTranscriptSync({ meeting, segments }) {
         return 0;
     }, [currentTime, segments]);
 
+    // Segment indices whose text or speaker contains the query
+    const matches = useMemo(() => {
+        const q = query.trim();
+        if (!q) return [];
+        const re = new RegExp(escapeRegex(q), 'i');
+        return segments.reduce((acc, seg, i) => {
+            if (re.test(seg.text) || re.test(seg.speaker)) acc.push(i);
+            return acc;
+        }, []);
+    }, [query, segments]);
+
+    // Reset to first result whenever the query changes
+    useEffect(() => { setMatchIdx(0); }, [query]);
+
     // Virtual list — only renders visible rows
     const virtualizer = useVirtualizer({
-        count:           segments.length,
+        count:            segments.length,
         getScrollElement: () => scrollRef.current,
-        estimateSize:    () => 64,
-        overscan:        5,
+        estimateSize:     () => 64,
+        overscan:         5,
     });
+
+    // Scroll to the current search result
+    useEffect(() => {
+        if (matches.length > 0) {
+            virtualizer.scrollToIndex(matches[matchIdx], { behavior: 'smooth', align: 'center' });
+        }
+    }, [matchIdx, matches]);
 
     // Auto-scroll to active segment while playing
     useEffect(() => {
@@ -145,16 +182,58 @@ function AudioTranscriptSync({ meeting, segments }) {
         }
     }, [activeIdx, isPlaying]);
 
-    const seek = (startTime) => {
-        seekTo(startTime);
-        setIsPlaying(true);
-    };
+    const seek       = (t) => { seekTo(t); setIsPlaying(true); };
+    const prevMatch  = () => setMatchIdx(i => (i - 1 + matches.length) % matches.length);
+    const nextMatch  = () => setMatchIdx(i => (i + 1) % matches.length);
 
     return (
         <div className="space-y-3">
             <p className="text-xs text-gray-400">
                 Click any segment to jump to that point · Audio plays in the bottom bar
             </p>
+
+            {/* Search bar */}
+            <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                    <svg className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400"
+                        fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+                    </svg>
+                    <input
+                        type="search"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') e.shiftKey ? prevMatch() : nextMatch();
+                        }}
+                        placeholder="Search transcript…"
+                        className="w-full rounded-md border border-gray-200 py-1.5 pl-8 pr-3 text-sm placeholder-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    />
+                </div>
+
+                {query.trim() && (
+                    <span className="shrink-0 text-xs tabular-nums text-gray-500">
+                        {matches.length > 0 ? `${matchIdx + 1} / ${matches.length}` : 'No results'}
+                    </span>
+                )}
+
+                {matches.length > 1 && (
+                    <>
+                        <button onClick={prevMatch} title="Previous (Shift+Enter)"
+                            className="rounded p-1.5 text-gray-500 hover:bg-gray-100 active:bg-gray-200">
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+                            </svg>
+                        </button>
+                        <button onClick={nextMatch} title="Next (Enter)"
+                            className="rounded p-1.5 text-gray-500 hover:bg-gray-100 active:bg-gray-200">
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                            </svg>
+                        </button>
+                    </>
+                )}
+            </div>
 
             {/* Virtual scroll container */}
             <div
@@ -163,8 +242,9 @@ function AudioTranscriptSync({ meeting, segments }) {
             >
                 <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
                     {virtualizer.getVirtualItems().map((virtualItem) => {
-                        const seg      = segments[virtualItem.index];
-                        const isActive = virtualItem.index === activeIdx && isPlaying;
+                        const seg            = segments[virtualItem.index];
+                        const isActive       = virtualItem.index === activeIdx && isPlaying;
+                        const isCurrentMatch = !!query.trim() && virtualItem.index === matches[matchIdx];
 
                         return (
                             <button
@@ -173,14 +253,16 @@ function AudioTranscriptSync({ meeting, segments }) {
                                 ref={virtualizer.measureElement}
                                 onClick={() => seek(seg.start)}
                                 style={{
-                                    position: 'absolute',
-                                    top:      0,
-                                    left:     0,
-                                    width:    '100%',
+                                    position:  'absolute',
+                                    top:       0,
+                                    left:      0,
+                                    width:     '100%',
                                     transform: `translateY(${virtualItem.start}px)`,
                                 }}
                                 className={`w-full text-left px-4 py-2.5 border-b border-gray-100 transition-colors duration-150 group ${
-                                    isActive ? 'bg-yellow-50' : 'hover:bg-white'
+                                    isCurrentMatch ? 'bg-yellow-50 ring-1 ring-inset ring-yellow-300' :
+                                    isActive       ? 'bg-yellow-50' :
+                                                     'hover:bg-white'
                                 }`}
                             >
                                 <div className="flex items-baseline gap-2">
@@ -188,13 +270,13 @@ function AudioTranscriptSync({ meeting, segments }) {
                                         <span className={`shrink-0 text-xs font-semibold ${
                                             isActive ? 'text-indigo-600' : 'text-indigo-400 group-hover:text-indigo-500'
                                         }`}>
-                                            {seg.speaker}
+                                            {highlightText(seg.speaker, query)}
                                         </span>
                                     )}
                                     <span className={`text-sm leading-relaxed ${
                                         isActive ? 'text-gray-900 font-medium' : 'text-gray-700'
                                     }`}>
-                                        {seg.text}
+                                        {highlightText(seg.text, query)}
                                     </span>
                                     <span className="ml-auto shrink-0 text-xs text-gray-300 group-hover:text-gray-400">
                                         {formatTime(seg.start)}
