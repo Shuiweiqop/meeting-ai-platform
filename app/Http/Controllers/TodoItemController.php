@@ -43,7 +43,10 @@ class TodoItemController extends Controller
 
     public function update(Request $request, TodoItem $todoItem): JsonResponse
     {
-        abort_if($todoItem->meeting->user_id !== Auth::id(), 403);
+        $isOwner    = $todoItem->meeting->user_id === Auth::id();
+        $isAssignee = $todoItem->assigned_to === Auth::id();
+
+        abort_if(! $isOwner && ! $isAssignee, 403);
 
         $request->validate(['status' => ['required', 'in:pending,in_progress,completed']]);
 
