@@ -1,25 +1,15 @@
-# Frontend domain — React/Inertia pages, Zustand stores, Echo/Reverb
+# Frontend — React/Inertia pages, Zustand audio store, Echo/Reverb
 
-MUST NOT read this file for backend-only (controller/job/model) work — see [../AGENTS.md](../AGENTS.md) routing table.
+Not sunk into code: no React ErrorBoundary exists, no ESLint config exists. See [../AGENTS.md](../AGENTS.md) "Status of enforcement".
 
-## Structure
-- `resources/js/Pages/<Domain>/<Action>.jsx` mirrors controller method names (`Meeting/Index`, `Meeting/Show`, `Meeting/Edit`, `Meeting/Upload`, `Team/Create`, etc.) — new pages MUST follow this `Inertia::render('Domain/Action', ...)` ↔ file path convention exactly.
-- `Components/` is shared UI (mostly Breeze scaffolding: `PrimaryButton`, `Modal`, `TextInput`, etc.) plus `GlobalAudioPlayer.jsx`, which is always mounted once in `AuthenticatedLayout` — do not remount it inside individual pages.
-- `stores/audioStore.js` — single global Zustand store for cross-page audio playback. `seekTo` is a placeholder function replaced at runtime via `registerSeek()` from `GlobalAudioPlayer` — this indirection exists so any page's transcript UI can command playback in the *global* (not page-local) audio element without prop drilling.
+## Page-to-controller naming is a real contract, not a convention to imitate for style
+`Inertia::render('Domain/Action', ...)` on the PHP side must match `resources/js/Pages/Domain/Action.jsx` exactly, including case — Inertia resolves the component path at runtime with no compile-time check. A mismatch is a runtime 500 (component not found), not a type error caught earlier. When adding a controller method that renders a new page, create the matching file first or the request will fail with no clue pointing at the naming mismatch specifically.
 
-## Real-time status pattern (MUST follow for any new pipeline-status UI)
-`Meeting/Show.jsx` listens via Laravel Echo:
-```js
-Echo.private(`meetings.${id}`).listen('.MeetingStatusUpdated', (e) => { ... })
-```
-- Channel authorization is server-side in `routes/channels.php` (uploader-only).
-- A 15s fallback poll is kept alongside the WebSocket listener for resilience — do not remove the fallback poll when adding new real-time features; Reverb can drop connections silently.
-- `processing_stage` values driving `StageTracker` must match exactly the stage-key strings dispatched by `ProcessMeetingJob::updateStage()` (`extracting_audio`, `transcribing`, `mapping_speakers`, `summarizing`) — if you add a pipeline stage, update `STAGES` in `Show.jsx` in the same change.
+## Why `seekTo` in `audioStore.js` starts as a no-op function
+`GlobalAudioPlayer` is mounted once in `AuthenticatedLayout` and owns the actual `<audio>` DOM element; it calls `registerSeek()` on mount to inject the real seek implementation into the store. Any page (e.g. the transcript view) that calls `seekTo()` before `GlobalAudioPlayer` has mounted and registered would otherwise call `undefined()` — the no-op default exists specifically to make that ordering safe. Don't remove the default or add a second `registerSeek()` call site; the store assumes exactly one player instance.
 
-## State/data-fetching conventions
-- Prefer Inertia's `router.reload({ only: [...] })` / props for server-driven state; use local `fetch` + optimistic UI only where the codebase already does (todo toggle in `Todos/Index.jsx`, `Meeting/Show.jsx` optimistic todos) — don't introduce a third data-fetching pattern (e.g. SWR/React Query) without asking.
-- Search/filter inputs use debouncing (350ms in `Meeting/Index.jsx`) or `useDeferredValue` (local-only search in `Todos/Index.jsx`) depending on whether the search hits the server or filters an already-loaded page — match whichever pattern fits: server round-trip → debounce + Inertia visit; local filter → `useDeferredValue`.
+## Why the 15-second fallback poll exists alongside the Echo listener
+`Meeting/Show.jsx` listens for `MeetingStatusUpdated` over `Echo.private('meetings.{id}')`, but also polls the same data every 15 seconds. Reverb connections can drop without a client-visible error (no reconnect event fires reliably in all cases tested), so this is not defensive redundancy — it is the actual failure recovery. Removing the poll because "we already have real-time updates" would mean a dropped WebSocket connection leaves the progress UI frozen with no user-facing indication that the meeting is still (or no longer) processing.
 
-## Scope discipline specific to frontend
-- MUST NOT change Tailwind config or add a new CSS framework without asking.
-- MUST NOT introduce a global state manager other than Zustand (already chosen) or bypass Inertia's routing with client-side routing libraries.
+## `processing_stage` string values are a shared vocabulary with the backend
+`STAGES` in `Show.jsx` (`extracting_audio`, `transcribing`, `mapping_speakers`, `summarizing`) must match the stage keys `ProcessMeetingJob::updateStage()` dispatches exactly — there is no shared enum between PHP and JS. Adding a pipeline stage without updating `STAGES` here doesn't error; it just means the new stage never highlights in the UI and the progress tracker looks stuck one step behind reality.

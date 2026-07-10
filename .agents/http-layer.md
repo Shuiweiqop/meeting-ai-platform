@@ -1,24 +1,17 @@
-# HTTP layer domain — Controllers, routes, form requests, authorization
+# HTTP layer — Controllers, routes, form requests, authorization
 
-MUST NOT read this file for pipeline/job or frontend-only work — see [../AGENTS.md](../AGENTS.md) routing table.
+Not sunk into code: no Policy classes, no middleware-based ownership check, no arch test enforcing this. It's a convention held together by every controller doing the same thing by hand — see [../AGENTS.md](../AGENTS.md) "Status of enforcement".
 
-## Naming & structure
-- Controllers are thin: validate (via Form Request where the model has one — `StoreMeetingRequest`, `StoreTeamRequest`, `ProfileUpdateRequest` — else inline `$request->validate()`), authorize, delegate to Eloquent/Job, return `Inertia::render()` or `redirect()`.
-- Resource routes via `Route::resource()` in `routes/web.php`; anything beyond CRUD (retry, export, share, chunk upload, todo toggle) is a named extra route grouped near its resource.
-- `SharedMeetingController::show` is the only controller action reachable without `auth` middleware — it is a public route (`/share/{token}`). MUST NOT add auth-requiring logic there; MUST NOT leak non-public fields (e.g. other users' emails) through it.
+## Authorization shape — three variants exist, match the one for your resource
+Every mutating/viewing action on a user-owned resource checks ownership with `abort_if(...)` as the first line, before any read or mutation:
+- **Single-owner** (`Meeting`, most `Team` actions): `abort_if($model->user_id !== Auth::id(), 403)`.
+- **Owner-or-member** (`TeamController::show`): `abort_if($team->owner_id !== Auth::id() && ! $team->members()->where('users.id', Auth::id())->exists(), 403)` — a team is visible to its members, not just its owner.
+- **Owner-or-assignee** (`TodoItemController::update`): `$isOwner = $todoItem->meeting->user_id === Auth::id(); $isAssignee = $todoItem->assigned_to === Auth::id(); abort_if(! $isOwner && ! $isAssignee, 403)` — either the meeting's uploader or the person a todo is assigned to can toggle its status.
 
-## Authorization pattern — MUST follow, do not introduce a second pattern
-Every action on a user-owned resource (`Meeting`, `Team` membership actions, `TodoItem`) checks ownership with `abort_if($model->user_id !== Auth::id(), 403)` at the top of the method, before any mutation. Example: [MeetingController.php](../app/Http/Controllers/MeetingController.php).
-- FORBIDDEN: relying on route-model-binding scoping alone, or checking ownership after a mutation has started.
-- FORBIDDEN: introducing Laravel Policies for this unless asked — the codebase consistently uses inline `abort_if`, not `$this->authorize()`. Match existing style.
+Picking the wrong variant for a new action is the actual risk: applying single-owner logic to a team-scoped or assignment-scoped resource locks out people who should have access (e.g. a team member trying to view a team, or an assignee trying to complete their own todo) rather than merely being over-permissive. Check which relationship — ownership, membership, or assignment — actually governs the resource before copying a pattern.
 
-## Error handling in this layer
-- Controllers MUST NOT catch pipeline/job exceptions — `ProcessMeetingJob::dispatch()` is fire-and-forget; failures surface later via `processing_stage`/`status` polling and WebSocket broadcast, not an HTTP response.
-- `ChunkUploadController::merge` is the one controller method with a try/catch (around the chunk-stitching loop) — it exists specifically to clean up the partial output file (`@unlink($finalAbsPath)`) before rethrowing. Follow this same "cleanup then rethrow" shape if you add another multi-step file operation; do not swallow the exception.
-- Validation errors: let `ValidationException` bubble (Laravel's default Inertia error-bag handling) — do not manually catch and reformat.
+## The one route with no auth
+`SharedMeetingController::show` (`/share/{token}`) is intentionally outside the `auth` middleware group — it's the public share-link view. It scopes by `share_token` + `status = 'completed'`, not by user. Anything added to this method must not assume `Auth::id()` is available, and must not eager-load or expose fields beyond what a public viewer should see (e.g. don't add the uploader's email to the `Inertia::render` payload here).
 
-## Adding a new controller action checklist
-1. Ownership check (`abort_if`) as the first line, if the resource is user- or team-scoped.
-2. Validate input (Form Request if reused elsewhere, inline `validate()` if single-use).
-3. Delegate business logic to a model method/Job — do not inline Gemini/FFmpeg calls in a controller.
-4. Return `Inertia::render()` (page load) or `redirect()->with('success'|'error', ...)` (mutation) — match existing flash-message key names (`success`) for consistency with `AuthenticatedLayout`'s toast handling.
+## The one controller with a try/catch
+`ChunkUploadController::merge` wraps the chunk-stitching loop in try/catch specifically to `@unlink($finalAbsPath)` before rethrowing — cleaning up a half-written file, not suppressing the error. Every other controller lets exceptions bubble to Laravel's default handler. If you add another multi-step file operation in a controller, this "cleanup then rethrow" shape is the one to copy; a catch that doesn't rethrow would return a 200-looking response for a request that actually failed halfway.

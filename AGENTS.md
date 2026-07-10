@@ -2,37 +2,43 @@
 
 Laravel 13 + React/Inertia app that turns uploaded meeting audio/video into transcripts, AI summaries, and action items via Gemini.
 
-## Commands
-Requires: Docker (MySQL on `3307`, Redis on `16379`), PHP 8.3, Node 20, FFmpeg on PATH.
+## Commands (verified against composer.json / package.json / docker-compose.yml)
+Requires: Docker (MySQL container on host port `3307`, Redis on `16379` — see `docker-compose.yml`), PHP 8.3, Node 20, FFmpeg binary on PATH (used by `php-ffmpeg/php-ffmpeg`, not bundled).
 - `composer install && npm install`
-- `docker start meeting_ai_mysql meeting_ai_redis` (or `docker-compose up -d`)
-- `composer run dev` — runs server + queue:listen + pail logs + vite concurrently
-- `php artisan reverb:start` — WebSocket server (separate terminal, not in `composer dev`)
-- `php artisan test --parallel` or `./vendor/bin/pest --parallel` — full suite (uses SQLite in-memory, see `phpunit.xml`)
-- `npm run build` — production frontend build
+- `docker compose up -d` (or `docker start meeting_ai_mysql meeting_ai_redis` if containers already exist)
+- `composer run dev` — concurrently runs `php artisan serve` + `queue:listen` + `pail` (log tail) + `vite` (defined in `composer.json` → `scripts.dev`)
+- `php artisan reverb:start` — WebSocket server; NOT part of `composer dev`, must be started separately in its own terminal (confirmed absent from the `scripts.dev` concurrently list)
+- `php artisan test --parallel` or `./vendor/bin/pest --parallel` — matches `.github/workflows/ci.yml` exactly
+- `npm run build` — production frontend build (also the CI step)
 
-## Routing table — read exactly ONE before touching that area, MUST NOT read the others speculatively
+## Read the file your task touches. When unsure, read it.
 | Task touches | Read |
 |---|---|
-| `ProcessMeetingJob`, Gemini prompts, FFmpeg extraction, WebSocket progress broadcasts | [.agents/pipeline.md](.agents/pipeline.md) |
-| Controllers, routes, form requests, authorization (`abort_if`) | [.agents/http-layer.md](.agents/http-layer.md) |
+| `ProcessMeetingJob`, Gemini prompts, FFmpeg extraction, stage/progress broadcasts | [.agents/pipeline.md](.agents/pipeline.md) |
+| Controllers, routes, form requests, the `abort_if` ownership checks | [.agents/http-layer.md](.agents/http-layer.md) |
 | Eloquent models, migrations, factories | [.agents/data-model.md](.agents/data-model.md) |
-| React/Inertia pages, Zustand stores, Echo/Reverb frontend wiring | [.agents/frontend.md](.agents/frontend.md) |
+| React/Inertia pages, Zustand audio store, Echo/Reverb frontend wiring | [.agents/frontend.md](.agents/frontend.md) |
 | Pest tests, CI workflow | [.agents/testing.md](.agents/testing.md) |
-| Logging conventions, error handling, retries | [.agents/defense.md](.agents/defense.md) |
+
+Changes spanning several areas (especially anything touching `meetings.status`/`processing_stage`): read all relevant files. Missing one costs far more than reading an extra one.
+
+If your task doesn't match any row above: don't guess at project-specific convention — ask, or say what you don't know, before inventing a pattern.
 
 ## Permissions
-Free to do: add/edit Pest tests, add log statements following the existing convention, run migrations locally, run `composer dev`/`npm run dev`.
-MUST ASK FIRST: schema changes to already-migrated columns, changing `.env.example` secrets/keys, editing `docker-compose.yml` ports, force-pushing, deleting migrations, changing `ProcessMeetingJob::$tries`/`$timeout`/`$uniqueFor` (see [.agents/pipeline.md](.agents/pipeline.md)).
+Free to do: add/edit Pest tests, run migrations locally, run `composer dev`/`npm run dev`.
+Ask first: editing an already-committed migration's `up()` (see [.agents/data-model.md](.agents/data-model.md)), changing `.env.example` secrets/keys, editing `docker-compose.yml` ports, changing `ProcessMeetingJob::$tries`/`$timeout`/`$uniqueFor` (see [.agents/pipeline.md](.agents/pipeline.md)), force-pushing.
 
 ## Priority Order (higher wins on conflict)
-1. Data integrity — never leave a `meeting.status` in an inconsistent state (e.g. `processing` forever) or silently drop a partial transcript/summary. If a user instruction would cause this, warn and stop before proceeding.
+1. Data integrity — never leave `meetings.status` inconsistent with `processing_stage` (e.g. `status=processing` with no forward progress, or `completed` with a deleted transcript). If a requested change would risk this, say so and stop before making it.
 2. This file + `.agents/*.md`
-3. Explicit user instruction for the current task
-4. Inferred convention from surrounding code
+3. The user's explicit instruction for the current task
+4. Convention inferred from surrounding code
 
 ## Scope discipline
-- Touch only files required by the task. No drive-by renames, reformatting, or "cleanup" of unrelated code.
-- If you spot an unrelated bug or magic value, propose it to the user — do not fix it inline.
-- One task = one focused diff. If the true scope turns out much larger than requested, stop and ask before continuing.
-- Hardcoded values that need a "confirm before changing" flag: `gemini-2.5-flash` model string, `ProcessMeetingJob` chunk/retry constants, `ChunkUploadController::ALLOWED_EXT`, pagination sizes (12 for meetings, 20 for todos) — these were tuned deliberately, not arbitrary.
+A task modifies the minimum coherent set of files required to solve one problem. Unrelated cleanup belongs in a different diff. If you spot an unrelated bug or magic value, propose it — don't fix it inline. If the real scope turns out to be much larger than requested, stop and ask.
+
+## Logging (cross-cutting — applies in every domain file above, not just one)
+Every log line in this codebase follows `Log::info("<ClassName> [{$id}]: <message>.")` (established in `ProcessMeetingJob`, e.g. `Log::info("ProcessMeetingJob [{$this->meeting->id}]: transcript saved.")`). Keep the literal class name + bracketed id + colon shape in any new log line — it's what makes `grep 'ProcessMeetingJob \['` in `storage/logs` return one entity's full lifecycle instead of nothing. `info` = normal milestone, `warning` = degraded-but-recovered, `error` = terminal failure (paired with a `failed()`-style hook, not a bare catch — see [.agents/pipeline.md](.agents/pipeline.md)). Never log the Gemini API key, Slack webhook URL, or raw audio bytes.
+
+## Status of enforcement in this repo (read before assuming a rule below is checked)
+There is no PHPStan/Larastan, no ESLint config, no Pest arch tests, and no custom global exception-handler logic in this codebase today — verified directly: `composer.json`/`composer.lock` list `laravel/pint` only, no `phpstan` package; no `.eslintrc*` file exists; `bootstrap/app.php`'s `withExceptions()` callback body is empty; `pestphp/pest-plugin-arch` is present only as a transitive dependency pulled in by Pest v4 itself and is not required in `composer.json` or referenced by any test. Every convention in this file and in `.agents/*.md` is **prose-enforced only** — violating one does not fail a build or a test today.

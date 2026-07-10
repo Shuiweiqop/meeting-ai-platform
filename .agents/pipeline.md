@@ -1,27 +1,21 @@
-# Pipeline domain — ProcessMeetingJob, Gemini, FFmpeg, real-time progress
+# Pipeline — ProcessMeetingJob, Gemini, FFmpeg, real-time progress
 
-MUST NOT read this file for pure controller/route/model work — see [../AGENTS.md](../AGENTS.md) routing table.
+Not sunk into code: nothing here is checked by a test or type today. Read [../AGENTS.md](../AGENTS.md) "Status of enforcement" before assuming otherwise.
 
-## Single request flow (upload → completed)
-1. `MeetingController::store` / `ChunkUploadController::merge` — save upload to `storage/app/public/meetings/`, create `Meeting` row (`status: pending`), dispatch `ProcessMeetingJob`.
-2. `ProcessMeetingJob::handle()` — sequential stages, each calling `updateStage()` which persists `meetings.processing_stage` and broadcasts `MeetingStatusUpdated` on `PrivateChannel('meetings.{id}')`:
-   - `extracting_audio` — FFmpeg normalizes video/audio → mp3 (only if a temp path is produced; progress broadcast every 5%)
-   - `transcribing` — Gemini `generateContent` with audio Blob → JSON array of `{start, speaker, text}` segments (`parseSegments()` degrades to a single wrapped segment on invalid JSON, never throws)
-   - `mapping_speakers` — second Gemini pass replaces generic `Speaker A/B` labels with real participant names (skipped if no generic labels found)
-   - `summarizing` — `Concurrency::run()` fires summary + todo-extraction prompts in parallel
-3. On success: `status: completed`, `processing_stage: null`, broadcast, cleanup temp audio, then email + Slack notifications.
-4. On failure: `failed(Throwable $e)` hook sets `status: failed`, clears stage, broadcasts, logs — this is the ONLY place that catches pipeline errors. Do not add try/catch inside `handle()` stages; let exceptions bubble to `failed()`.
+## Flow
+`MeetingController::store` / `ChunkUploadController::merge` save the upload, create a `Meeting` (`status: pending`), dispatch `ProcessMeetingJob`. The job runs four sequential stages, each calling `updateStage()` (persists `processing_stage` + broadcasts `MeetingStatusUpdated` on `PrivateChannel('meetings.{id}')`):
+`extracting_audio` → `transcribing` → `mapping_speakers` → `summarizing`. On success: `status: completed`, `processing_stage: null`, cleanup temp audio, then email + Slack. On any uncaught exception: `failed()` hook sets `status: failed`, clears stage, logs, and cleans up temp audio.
 
-## Per-layer rules
-- **Job stages MUST NOT swallow exceptions.** Gemini/FFmpeg failures should propagate up to `failed()`. Only JSON-parsing of Gemini's *own* response is defensively handled (`parseSegments`, `mapSpeakers` json_decode checks) because malformed AI output is expected, not exceptional.
-- **MUST NOT** change `$tries = 3`, `$timeout = 600`, `$uniqueFor = 3600` on `ProcessMeetingJob` without asking first — these bound retry cost against the Gemini API and prevent duplicate dispatch for the same meeting (`ShouldBeUnique` + `uniqueId()`).
-- **MUST** call `updateStage()` (not a bare `$meeting->update()`) when introducing a new pipeline stage, so the broadcast + persisted stage stay in sync.
-- **MUST** clean up `$extractedAudioPath` via `cleanupExtractedAudio()` in both the success path and `failed()` — never leave orphaned temp mp3s in `storage/app/public/meetings/`.
+## Why there's no try/catch inside `handle()`
+Laravel's retry mechanism (`$tries = 3`) and the `failed()` hook *are* the error handling. If you wrap a stage in `try { ... } catch (\Throwable $e) { Log::error(...); return; }`, the job returns normally — Laravel considers it a successful run, the retry never fires, and `failed()` never runs. The meeting is left stuck in `processing` forever with no transcript, no summary, and no user-visible failure state. This has no test guarding it (see enforcement note above) — think it through by hand before adding any catch inside a stage.
 
-## Gemini prompts
-- Model is hardcoded as `gemini-2.5-flash` in three places (`transcribe`, `mapSpeakers`, `summarize`'s two closures) — MUST confirm with user before changing model string, it must change in all call sites together.
-- All prompts demand "ONLY valid JSON — no markdown, no code fences" and responses are stripped via `preg_replace('/^```(?:json)?\s*|\s*```$/s', ...)` before `json_decode`. Any new Gemini call MUST follow this same strip-then-decode pattern for consistency.
+The *only* exception: `parseSegments()` and the `mapSpeakers()` JSON check swallow decode errors from Gemini's own response text, because a malformed AI reply is an expected, recoverable case (falls back to a single wrapped segment / unmapped speaker labels), not a transport failure. That distinction — "the AI said something we can't parse" vs. "the AI/FFmpeg call itself failed" — is the line between what's safe to catch and what must bubble.
 
-## FFmpeg
-- Two independent extraction paths exist: `MeetingController::extractAudio()` (non-chunked upload, video-only) and `ProcessMeetingJob::extractAudio()` (always runs, any format, with progress broadcast). Keep them behaviorally consistent if you touch one.
-- Supported upload extensions are gated by `ChunkUploadController::ALLOWED_EXT` — the job's `resolveMimeType()` match arm list MUST stay in sync with anything added there.
+## Things that will silently break if changed without checking call sites
+- `$tries`, `$timeout`, `$uniqueFor` on `ProcessMeetingJob`, plus `ShouldBeUnique` + `uniqueId() = meeting.id`: a second dispatch for the same meeting within `$uniqueFor` seconds is a silent no-op. Lowering `$uniqueFor` without understanding this means duplicate transcriptions on retry-heavy meetings; raising it means a legitimately stuck meeting can't be re-dispatched until it expires.
+- The Gemini model string `gemini-2.5-flash` appears independently in three places (`transcribe`, `mapSpeakers`, and both closures inside `summarize`) — changing it in one place but not the others produces a job that transcribes on one model and summarizes on another with no error, just inconsistent output quality.
+- `updateStage()` must be the only way `processing_stage` changes — a bare `$meeting->update(['processing_stage' => ...])` skips the broadcast, and the frontend `StageTracker` (see [frontend.md](frontend.md)) will show a stuck progress bar even though the backend moved on.
+- `resolveMimeType()`'s match arms must stay in sync with `ChunkUploadController::ALLOWED_EXT` — adding an extension to one without the other means either an upload that's accepted but transcribed with the wrong MIME type, or a MIME case that can never be reached.
+
+## Gemini response parsing
+All three prompt call sites strip markdown fences (`` preg_replace('/^```(?:json)?\s*|\s*```$/s', ...) ``) before `json_decode`. Gemini sometimes wraps JSON in code fences despite being told not to — any new Gemini call that expects structured output needs this same strip step, or `json_decode` silently returns `null` and downstream code (which does `?? []` fallbacks) will produce empty/default records with no error surfaced.

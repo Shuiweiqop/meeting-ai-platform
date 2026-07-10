@@ -1,23 +1,23 @@
-# Testing domain — Pest, CI
+# Testing — Pest, CI
 
-MUST NOT read this file for pure implementation work unless writing/updating tests — see [../AGENTS.md](../AGENTS.md) routing table.
+Not sunk into code: nothing blocks a test file living in the wrong directory or missing `Queue::fake()` except CI eventually catching a flaky/real-API-calling run. See [../AGENTS.md](../AGENTS.md) "Status of enforcement".
 
-## Conventions — MUST follow
-- Tests are Pest (`it('...', fn () => ...)`), not PHPUnit classes. Live under `tests/Feature/<Domain>Test.php`, one file per controller/domain (`MeetingTest`, `TeamTest`, `TodoAndShareTest`, `ProfileTest`, `Auth/*`).
-- Every Feature test extends `TestCase` with `RefreshDatabase` (wired globally in `tests/Pest.php` via `pest()->extend(...)->use(RefreshDatabase::class)->in('Feature')`) — MUST NOT add a new test outside `tests/Feature`/`tests/Unit` or it won't get this trait.
-- `Queue::fake()` MUST be used when testing any endpoint that dispatches `ProcessMeetingJob` (upload, retry) — do not let real Gemini/FFmpeg calls run in tests. Assert with `Queue::assertPushed(ProcessMeetingJob::class, ...)`.
-- `Storage::fake('public')` for any test touching file upload — never write to the real `storage/app/public` disk from a test.
-- Auth-guard tests (`redirects guests from X`) are expected for every new authenticated route — follow the existing pattern of one `it(...)` per guarded route at the top of the relevant test file.
-- Ownership tests (403 for non-owners) are expected for every new user-scoped action, mirroring `abort_if` checks in [.agents/http-layer.md](http-layer.md).
+## Why `Queue::fake()` is required on any test hitting an upload/retry endpoint
+`ProcessMeetingJob` calls the real Gemini API and real FFmpeg binary in `handle()`. `phpunit.xml` sets `QUEUE_CONNECTION=sync`, which means without `Queue::fake()`, dispatching the job in a test executes it inline immediately — a real network call to Gemini, in CI, using the fake key set in `.github/workflows/ci.yml` (`GEMINI_API_KEY=fake-key-for-ci`), which will fail or hang rather than skip. `Queue::fake()` + `Queue::assertPushed(ProcessMeetingJob::class, ...)` tests that the dispatch happened without ever running the job body.
 
-## Running tests
-- `php artisan test --parallel` (matches CI) or `./vendor/bin/pest --parallel`.
-- Config: SQLite in-memory (`phpunit.xml`), `QUEUE_CONNECTION=sync` is overridden — but `Queue::fake()` still needed per-test since sync would otherwise execute jobs inline.
-- CI (`.github/workflows/ci.yml`): PHP 8.3 + SQLite → `php artisan test --parallel`, then Node 20 → `npm run build`. `GEMINI_API_KEY` is set to a fake value in CI — no live API calls are ever made in the test suite or CI.
+## Why every Feature test needs `RefreshDatabase`, and how it's actually wired
+`tests/Pest.php` applies `RefreshDatabase` globally to everything under `tests/Feature` via `pest()->extend(TestCase::class)->use(RefreshDatabase::class)->in('Feature')`. A test file placed outside `tests/Feature`/`tests/Unit` does not get this binding — it would share database state across tests with no isolation, producing failures that depend on run order rather than the code under test.
 
-## Definition of Done for any backend change
-- [ ] New/changed controller action has an auth-guard test (if newly authenticated) and an ownership test (if user-scoped)
-- [ ] New/changed job stage or Gemini call path has `Queue::fake()` coverage at the dispatch site (not the job internals — job internals calling real Gemini are not unit-tested, by design)
+## `Storage::fake('public')` for upload tests
+Without it, a test writing an "uploaded" file writes to the real `storage/app/public` disk on whatever machine runs the test — including CI, where it either pollutes the runner or fails on a missing directory `storage/app/public/meetings/` was never guaranteed to exist.
+
+## Running
+- `php artisan test --parallel` or `./vendor/bin/pest --parallel` — this is the exact command CI runs (`.github/workflows/ci.yml`).
+- CI also runs `npm run build` after PHP tests pass — a `.jsx` change that breaks the Vite build fails CI even if every Pest test is green.
+
+## Definition of Done for a backend change
+- [ ] New/changed controller action has an auth-guard test (guest redirect) if newly authenticated, and an ownership/authorization test matching whichever `abort_if` variant applies (see [http-layer.md](http-layer.md) — single-owner, owner-or-member, or owner-or-assignee)
+- [ ] Any test dispatching `ProcessMeetingJob` uses `Queue::fake()` — job internals themselves are not exercised against real Gemini/FFmpeg in this suite, by design
 - [ ] `php artisan test --parallel` passes
 - [ ] `npm run build` succeeds if any `.jsx` changed
-- [ ] No migration edited in place — new migration added if schema changed
+- [ ] No migration edited in place — a new migration was added if the schema changed (see [data-model.md](data-model.md))
