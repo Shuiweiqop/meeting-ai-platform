@@ -10,12 +10,12 @@ class TodoItemFactory extends Factory
     public function definition(): array
     {
         return [
-            'meeting_id'  => Meeting::factory(),
+            'meeting_id' => Meeting::factory(),
             'assigned_to' => null,
-            'title'       => fake()->sentence(5),
+            'title' => fake()->sentence(5),
             'description' => fake()->sentence(),
-            'status'      => 'pending',
-            'due_date'    => null,
+            'status' => 'pending',
+            'due_date' => null,
         ];
     }
 }

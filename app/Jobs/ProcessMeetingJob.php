@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Enums\ProcessingStage;
 use App\Events\MeetingStatusUpdated;
 use App\Mail\MeetingProcessedMail;
 use App\Mail\TodoAssignedMail;
@@ -10,6 +11,7 @@ use App\Models\Meeting;
 use App\Models\TodoItem;
 use App\Models\Transcript;
 use App\Models\User;
+use App\Support\GeminiJson;
 use FFMpeg\FFMpeg;
 use FFMpeg\Format\Audio\Mp3 as Mp3Format;
 use Gemini\Data\Blob;
@@ -23,12 +25,14 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 
-class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
+class ProcessMeetingJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
-    public int $tries     = 3;
-    public int $timeout   = 600;
+    public int $tries = 3;
+
+    public int $timeout = 600;
+
     public int $uniqueFor = 3600;
 
     private ?string $extractedAudioPath = null;
@@ -42,68 +46,74 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
 
     public function handle(): void
     {
-        $this->meeting->update(['status' => 'processing']);
+        $this->meeting->transitionTo('processing');
         Log::info("ProcessMeetingJob [{$this->meeting->id}]: started.");
 
         $participantNames = $this->resolveParticipantNames();
 
         // Stage 0: Normalize audio via FFmpeg (handles video→audio too)
-        $this->updateStage('extracting_audio');
+        $this->updateStage(ProcessingStage::ExtractingAudio);
         $audioStoragePath = $this->extractAudio();
 
         // Stage 1: Transcribe audio → timestamped segments
-        $this->updateStage('transcribing');
+        $this->updateStage(ProcessingStage::Transcribing);
         $segments = $this->transcribe($participantNames, $audioStoragePath);
 
         // Stage 2: Map generic "Speaker A" labels to real names
-        $this->updateStage('mapping_speakers');
+        $this->updateStage(ProcessingStage::MappingSpeakers);
         if (count($participantNames) > 0) {
             $segments = $this->mapSpeakers($segments, $participantNames);
         }
 
         // Build plain-text content from segments for backwards compatibility
         $content = collect($segments)
-            ->map(fn ($s) => trim(($s['speaker'] ? "{$s['speaker']}: " : '') . $s['text']))
+            ->map(fn ($s) => trim(($s['speaker'] ? "{$s['speaker']}: " : '').$s['text']))
             ->implode("\n\n");
 
         Transcript::create([
             'meeting_id' => $this->meeting->id,
-            'content'    => $content,
-            'segments'   => $segments,
-            'language'   => null,
+            'content' => $content,
+            'segments' => $segments,
+            'language' => null,
         ]);
 
         Log::info("ProcessMeetingJob [{$this->meeting->id}]: transcript saved ({$this->countSegments($segments)} segments).");
 
         // Stage 3: Concurrent summary + todos generation
-        $this->updateStage('summarizing');
+        $this->updateStage(ProcessingStage::Summarizing);
         $this->summarize($content);
 
         Log::info("ProcessMeetingJob [{$this->meeting->id}]: summary + todos saved.");
 
-        $this->meeting->update(['status' => 'completed', 'processing_stage' => null]);
-        broadcast(new MeetingStatusUpdated($this->meeting));
+        $this->meeting->transitionTo('completed');
         Log::info("ProcessMeetingJob [{$this->meeting->id}]: done.");
 
         $this->cleanupExtractedAudio();
-        $this->sendNotifications();
+
+        try {
+            $this->sendNotifications();
+        } catch (\Throwable $e) {
+            // The meeting is already completed — letting this bubble would retry
+            // the whole job and end with failed() marking a processed meeting as
+            // failed. Recoverable by design, unlike a stage failure (pipeline.md).
+            Log::warning("ProcessMeetingJob [{$this->meeting->id}]: notifications failed after completion — {$e->getMessage()}");
+        }
     }
 
-    private function updateStage(string $stage): void
+    private function updateStage(ProcessingStage $stage): void
     {
-        $this->meeting->update(['processing_stage' => $stage]);
-        broadcast(new MeetingStatusUpdated($this->meeting));
+        $this->meeting->transitionTo('processing', $stage);
     }
 
     // ─── Audio extraction ─────────────────────────────────────────────────────
 
     private function extractAudio(): string
     {
-        $sourcePath   = Storage::disk('public')->path($this->meeting->audio_path);
-        $relativePath = 'meetings/tmp_' . $this->meeting->id . '.mp3';
-        $outputPath   = Storage::disk('public')->path($relativePath);
+        $sourcePath = Storage::disk('public')->path($this->meeting->audio_path);
+        $relativePath = 'meetings/tmp_'.$this->meeting->id.'.mp3';
+        $outputPath = Storage::disk('public')->path($relativePath);
 
-        $format  = new Mp3Format();
+        $format = new Mp3Format;
         $lastPct = -1;
 
         $format->on('progress', function ($media, $format, $percentage) use (&$lastPct) {
@@ -144,12 +154,12 @@ class ProcessMeetingJob implements ShouldQueue, ShouldBeUnique
     private function transcribe(array $participantNames = [], ?string $audioStoragePath = null): array
     {
         $storagePath = $audioStoragePath ?? $this->meeting->audio_path;
-        $audioPath   = Storage::disk('public')->path($storagePath);
-        $mimeType    = $this->resolveMimeType($storagePath);
+        $audioPath = Storage::disk('public')->path($storagePath);
+        $mimeType = $this->resolveMimeType($storagePath);
         $audioData = base64_encode(file_get_contents($audioPath));
 
         $nameHint = count($participantNames) > 0
-            ? 'The following people may be present: ' . implode(', ', $participantNames) . '. ' .
+            ? 'The following people may be present: '.implode(', ', $participantNames).'. '.
               'Label each speaker by their actual name when identifiable; otherwise use Speaker A, Speaker B, etc.'
             : 'If multiple speakers are present, use Speaker A, Speaker B, etc.';
 
@@ -164,8 +174,8 @@ Example:
 [{"start": 0.0, "speaker": "Nigel", "text": "Good morning everyone."}, {"start": 4.2, "speaker": "Jefry", "text": "Morning! Let's get started."}]
 PROMPT;
 
-        $client   = \Gemini::client(config('services.gemini.key'));
-        $raw      = $client->generativeModel(model: 'gemini-2.5-flash')
+        $client = \Gemini::client(config('services.gemini.key'));
+        $raw = $client->generativeModel(model: config('services.gemini.model'))
             ->generateContent([new Blob(mimeType: $mimeType, data: $audioData), $prompt])
             ->text();
 
@@ -174,19 +184,19 @@ PROMPT;
 
     private function parseSegments(string $raw): array
     {
-        $json     = preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($raw));
-        $segments = json_decode($json, true);
+        $segments = GeminiJson::decode($raw);
 
         if (! is_array($segments) || empty($segments)) {
             Log::warning("ProcessMeetingJob [{$this->meeting->id}]: transcribe returned invalid JSON — wrapping as single segment.");
+
             return [['start' => 0.0, 'speaker' => '', 'text' => trim($raw)]];
         }
 
         // Normalise keys
         return array_map(fn ($s) => [
-            'start'   => (float) ($s['start']   ?? 0.0),
+            'start' => (float) ($s['start'] ?? 0.0),
             'speaker' => (string) ($s['speaker'] ?? ''),
-            'text'    => (string) ($s['text']    ?? ''),
+            'text' => (string) ($s['text'] ?? ''),
         ], $segments);
     }
 
@@ -207,6 +217,7 @@ PROMPT;
 
         if (empty($genericLabels)) {
             Log::info("ProcessMeetingJob [{$this->meeting->id}]: no generic speaker labels — skipping mapSpeakers.");
+
             return $segments;
         }
 
@@ -223,16 +234,16 @@ Example: {"Speaker A": "Nigel", "Speaker B": "Jefry"}
 Use "Unknown" when you cannot determine the speaker.
 PROMPT;
 
-        $raw  = \Gemini::client(config('services.gemini.key'))
-            ->generativeModel(model: 'gemini-2.5-flash')
-            ->generateContent([$prompt . "\n\nFULL TRANSCRIPT:\n" . $this->segmentsToText($segments)])
+        $raw = \Gemini::client(config('services.gemini.key'))
+            ->generativeModel(model: config('services.gemini.model'))
+            ->generateContent([$prompt."\n\nFULL TRANSCRIPT:\n".$this->segmentsToText($segments)])
             ->text();
 
-        $json = preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($raw));
-        $map  = json_decode($json, true);
+        $map = GeminiJson::decode($raw);
 
         if (! is_array($map)) {
             Log::warning("ProcessMeetingJob [{$this->meeting->id}]: mapSpeakers returned invalid JSON.");
+
             return $segments;
         }
 
@@ -243,6 +254,7 @@ PROMPT;
             if ($mapped && $mapped !== 'Unknown') {
                 $seg['speaker'] = $mapped;
             }
+
             return $seg;
         }, $segments);
     }
@@ -265,33 +277,29 @@ PROMPT;
             fn () => $this->callGeminiForTodos($transcript, $apiKey),
         ]);
 
-        $summaryData = json_decode(
-            preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($summaryRaw)), true
-        ) ?? [];
+        $summaryData = GeminiJson::decode($summaryRaw) ?? [];
 
         AiSummary::create([
-            'meeting_id'   => $this->meeting->id,
-            'summary'      => $summaryData['summary'] ?? 'No summary generated.',
-            'key_points'   => $summaryData['key_points'] ?? [],
+            'meeting_id' => $this->meeting->id,
+            'summary' => $summaryData['summary'] ?? 'No summary generated.',
+            'key_points' => $summaryData['key_points'] ?? [],
             'raw_response' => $summaryRaw,
         ]);
 
-        $todos = json_decode(
-            preg_replace('/^```(?:json)?\s*|\s*```$/s', '', trim($todosRaw)), true
-        ) ?? [];
+        $todos = GeminiJson::decode($todosRaw) ?? [];
 
         foreach ($todos as $todo) {
             $assignee = null;
             if (! empty($todo['assignee_name'])) {
-                $assignee = User::where('name', 'like', '%' . $todo['assignee_name'] . '%')->first();
+                $assignee = User::where('name', 'like', '%'.$todo['assignee_name'].'%')->first();
             }
             TodoItem::create([
-                'meeting_id'  => $this->meeting->id,
+                'meeting_id' => $this->meeting->id,
                 'assigned_to' => $assignee?->id,
-                'title'       => $todo['title'] ?? 'Untitled task',
+                'title' => $todo['title'] ?? 'Untitled task',
                 'description' => $todo['description'] ?? null,
-                'due_date'    => null,
-                'status'      => 'pending',
+                'due_date' => null,
+                'status' => 'pending',
             ]);
         }
     }
@@ -308,7 +316,8 @@ Required structure:
 TRANSCRIPT:
 {$transcript}
 PROMPT;
-        return \Gemini::client($apiKey)->generativeModel(model: 'gemini-2.5-flash')
+
+        return \Gemini::client($apiKey)->generativeModel(model: config('services.gemini.model'))
             ->generateContent([$prompt])->text();
     }
 
@@ -324,7 +333,8 @@ Required structure:
 TRANSCRIPT:
 {$transcript}
 PROMPT;
-        return \Gemini::client($apiKey)->generativeModel(model: 'gemini-2.5-flash')
+
+        return \Gemini::client($apiKey)->generativeModel(model: config('services.gemini.model'))
             ->generateContent([$prompt])->text();
     }
 
@@ -332,8 +342,8 @@ PROMPT;
 
     private function sendNotifications(): void
     {
-        $meeting = $this->meeting->load(['user', 'todoItems.assignee']);
-        Mail::to($meeting->user)->queue(new MeetingProcessedMail($meeting));
+        $meeting = $this->meeting->load(['uploader', 'todoItems.assignee']);
+        Mail::to($meeting->uploader)->queue(new MeetingProcessedMail($meeting));
         $meeting->todoItems
             ->filter(fn ($t) => $t->assignee && $t->assignee->id !== $meeting->user_id)
             ->groupBy('assigned_to')
@@ -343,12 +353,16 @@ PROMPT;
 
     private function notifySlack($meeting): void
     {
-        $webhookUrl = $meeting->user->slack_webhook_url;
-        if (! $webhookUrl) return;
-        $summary   = $meeting->aiSummary?->summary ?? 'No summary generated.';
-        $todoLines = $meeting->todoItems->map(fn ($t) => "• {$t->title}" . ($t->assignee ? " → {$t->assignee->name}" : ''))->implode("\n");
+        $webhookUrl = $meeting->uploader->slack_webhook_url;
+        if (! $webhookUrl) {
+            return;
+        }
+        $summary = $meeting->aiSummary?->summary ?? 'No summary generated.';
+        $todoLines = $meeting->todoItems->map(fn ($t) => "• {$t->title}".($t->assignee ? " → {$t->assignee->name}" : ''))->implode("\n");
         $text = "*Meeting Ready: {$meeting->title}*\n\n{$summary}";
-        if ($todoLines) $text .= "\n\n*Action Items:*\n{$todoLines}";
+        if ($todoLines) {
+            $text .= "\n\n*Action Items:*\n{$todoLines}";
+        }
         Http::post($webhookUrl, ['text' => $text]);
     }
 
@@ -356,20 +370,21 @@ PROMPT;
 
     private function resolveParticipantNames(): array
     {
-        $this->meeting->loadMissing(['user', 'team.members']);
-        $names = collect([$this->meeting->user->name]);
+        $this->meeting->loadMissing(['uploader', 'team.members']);
+        $names = collect([$this->meeting->uploader->name]);
         if ($this->meeting->team) {
             $names = $names->merge($this->meeting->team->members->pluck('name'));
         }
+
         return $names->unique()->values()->toArray();
     }
 
     private function resolveMimeType(string $path): MimeType
     {
         return match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
-            'wav'  => MimeType::AUDIO_WAV,
-            'm4a'  => MimeType::AUDIO_AAC,
-            'ogg'  => MimeType::AUDIO_OGG,
+            'wav' => MimeType::AUDIO_WAV,
+            'm4a' => MimeType::AUDIO_AAC,
+            'ogg' => MimeType::AUDIO_OGG,
             'flac' => MimeType::AUDIO_FLAC,
             default => MimeType::AUDIO_MP3,
         };
@@ -378,8 +393,7 @@ PROMPT;
     public function failed(\Throwable $e): void
     {
         $this->cleanupExtractedAudio();
-        $this->meeting->update(['status' => 'failed', 'processing_stage' => null]);
-        broadcast(new MeetingStatusUpdated($this->meeting));
+        $this->meeting->transitionTo('failed');
         Log::error("ProcessMeetingJob [{$this->meeting->id}]: failed — {$e->getMessage()}");
     }
 }

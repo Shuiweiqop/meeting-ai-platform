@@ -33,7 +33,7 @@ class TeamController extends Controller
     public function store(StoreTeamRequest $request): RedirectResponse
     {
         $team = Team::create([
-            'name'     => $request->name,
+            'name' => $request->name,
             'owner_id' => Auth::id(),
         ]);
 

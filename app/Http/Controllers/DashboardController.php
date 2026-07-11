@@ -39,8 +39,8 @@ class DashboardController extends Controller
 
         return Inertia::render('Dashboard', [
             'recentMeetings' => $recentMeetings,
-            'myTodos'        => $myTodos,
-            'teamActivity'   => $teamActivity,
+            'myTodos' => $myTodos,
+            'teamActivity' => $teamActivity,
         ]);
     }
 }

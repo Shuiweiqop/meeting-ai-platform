@@ -37,6 +37,9 @@ return [
 
     'gemini' => [
         'key' => env('GEMINI_API_KEY'),
+        // Single source of truth — every Gemini call site must read this,
+        // never hardcode a model string (guarded by AgentsDocGuardTest).
+        'model' => env('GEMINI_MODEL', 'gemini-2.5-flash'),
     ],
 
 ];

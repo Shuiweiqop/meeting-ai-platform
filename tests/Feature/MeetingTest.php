@@ -20,7 +20,7 @@ it('redirects guests from upload page', function () {
 // ─── Meeting list ─────────────────────────────────────────────────────────────
 
 it('shows only the authenticated user\'s meetings', function () {
-    $user  = User::factory()->create();
+    $user = User::factory()->create();
     $other = User::factory()->create();
 
     Meeting::factory()->create(['user_id' => $user->id,  'title' => 'My Meeting']);
@@ -68,19 +68,19 @@ it('uploads an audio file and dispatches processing job', function () {
 
     $this->actingAs($user)
         ->post(route('meetings.store'), [
-            'title'      => 'Sprint Planning',
+            'title' => 'Sprint Planning',
             'audio_file' => $file,
         ])
         ->assertRedirect(route('meetings.index'));
 
     $this->assertDatabaseHas('meetings', [
         'user_id' => $user->id,
-        'title'   => 'Sprint Planning',
-        'status'  => 'pending',
+        'title' => 'Sprint Planning',
+        'status' => 'pending',
     ]);
 
     Queue::assertPushed(ProcessMeetingJob::class);
-    Storage::disk('public')->assertExists('meetings/' . $file->hashName());
+    Storage::disk('public')->assertExists('meetings/'.$file->hashName());
 });
 
 it('rejects upload without a title', function () {
@@ -103,7 +103,7 @@ it('rejects upload without a file', function () {
 // ─── Show / auth ──────────────────────────────────────────────────────────────
 
 it('owner can view their meeting detail', function () {
-    $user    = User::factory()->create();
+    $user = User::factory()->create();
     $meeting = Meeting::factory()->create(['user_id' => $user->id, 'title' => 'My Meeting']);
 
     $this->actingAs($user)
@@ -127,9 +127,9 @@ it('returns 403 when another user tries to view a meeting', function () {
 it('owner can delete their meeting', function () {
     Storage::fake('public');
 
-    $user    = User::factory()->create();
+    $user = User::factory()->create();
     $meeting = Meeting::factory()->create([
-        'user_id'    => $user->id,
+        'user_id' => $user->id,
         'audio_path' => 'meetings/test.mp3',
     ]);
 
@@ -157,10 +157,10 @@ it('returns 403 when another user tries to delete a meeting', function () {
 it('owner can retry a failed meeting', function () {
     Queue::fake();
 
-    $user    = User::factory()->create();
+    $user = User::factory()->create();
     $meeting = Meeting::factory()->create([
         'user_id' => $user->id,
-        'status'  => 'failed',
+        'status' => 'failed',
     ]);
 
     $this->actingAs($user)
@@ -172,10 +172,10 @@ it('owner can retry a failed meeting', function () {
 });
 
 it('cannot retry a meeting that is not failed', function () {
-    $user    = User::factory()->create();
+    $user = User::factory()->create();
     $meeting = Meeting::factory()->create([
         'user_id' => $user->id,
-        'status'  => 'completed',
+        'status' => 'completed',
     ]);
 
     $this->actingAs($user)

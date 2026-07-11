@@ -17,15 +17,15 @@ class ChunkUploadController extends Controller
     public function chunk(Request $request): JsonResponse
     {
         $request->validate([
-            'upload_id'    => ['required', 'string', 'uuid'],
-            'chunk_index'  => ['required', 'integer', 'min:0', 'max:9999'],
+            'upload_id' => ['required', 'string', 'uuid'],
+            'chunk_index' => ['required', 'integer', 'min:0', 'max:9999'],
             'total_chunks' => ['required', 'integer', 'min:1', 'max:500'],
-            'chunk'        => ['required', 'file', 'max:6144'], // 6 MB per chunk
+            'chunk' => ['required', 'file', 'max:6144'], // 6 MB per chunk
         ]);
 
         $request->file('chunk')->storeAs(
-            'chunks/' . $request->upload_id,
-            'chunk_' . $request->chunk_index,
+            'chunks/'.$request->upload_id,
+            'chunk_'.$request->chunk_index,
             'local'
         );
 
@@ -35,21 +35,21 @@ class ChunkUploadController extends Controller
     public function merge(Request $request): JsonResponse
     {
         $request->validate([
-            'upload_id'    => ['required', 'string', 'uuid'],
-            'filename'     => ['required', 'string', 'max:255'],
+            'upload_id' => ['required', 'string', 'uuid'],
+            'filename' => ['required', 'string', 'max:255'],
             'total_chunks' => ['required', 'integer', 'min:1', 'max:500'],
-            'title'        => ['required', 'string', 'max:255'],
-            'description'  => ['nullable', 'string'],
-            'team_id'      => ['nullable', 'exists:teams,id'],
+            'title' => ['required', 'string', 'max:255'],
+            'description' => ['nullable', 'string'],
+            'team_id' => ['nullable', 'exists:teams,id'],
         ]);
 
-        $uploadId    = $request->upload_id;
+        $uploadId = $request->upload_id;
         $totalChunks = (int) $request->total_chunks;
-        $ext         = strtolower(pathinfo($request->filename, PATHINFO_EXTENSION));
+        $ext = strtolower(pathinfo($request->filename, PATHINFO_EXTENSION));
 
         abort_if(! in_array($ext, self::ALLOWED_EXT, true), 422, 'Unsupported file type.');
 
-        $finalRelPath = 'meetings/' . Str::uuid() . '.' . $ext;
+        $finalRelPath = 'meetings/'.Str::uuid().'.'.$ext;
         $finalAbsPath = Storage::disk('public')->path($finalRelPath);
 
         Storage::disk('public')->makeDirectory('meetings');
@@ -74,12 +74,12 @@ class ChunkUploadController extends Controller
         Storage::disk('local')->deleteDirectory("chunks/{$uploadId}");
 
         $meeting = Meeting::create([
-            'user_id'     => Auth::id(),
-            'team_id'     => $request->team_id ?: null,
-            'title'       => $request->title,
+            'user_id' => Auth::id(),
+            'team_id' => $request->team_id ?: null,
+            'title' => $request->title,
             'description' => $request->description,
-            'audio_path'  => $finalRelPath,
-            'status'      => 'pending',
+            'audio_path' => $finalRelPath,
+            'status' => 'pending',
         ]);
 
         ProcessMeetingJob::dispatch($meeting);

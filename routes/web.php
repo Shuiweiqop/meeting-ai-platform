@@ -2,9 +2,9 @@
 
 use App\Http\Controllers\ChunkUploadController;
 use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\SharedMeetingController;
 use App\Http\Controllers\MeetingController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\SharedMeetingController;
 use App\Http\Controllers\TeamController;
 use App\Http\Controllers\TodoItemController;
 use Illuminate\Support\Facades\Auth;

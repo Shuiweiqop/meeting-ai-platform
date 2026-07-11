@@ -7,13 +7,13 @@ use App\Models\User;
 // ─── Todo toggle ──────────────────────────────────────────────────────────────
 
 it('assignee can toggle a todo to completed', function () {
-    $owner    = User::factory()->create();
+    $owner = User::factory()->create();
     $assignee = User::factory()->create();
-    $meeting  = Meeting::factory()->create(['user_id' => $owner->id]);
-    $todo     = TodoItem::factory()->create([
-        'meeting_id'  => $meeting->id,
+    $meeting = Meeting::factory()->create(['user_id' => $owner->id]);
+    $todo = TodoItem::factory()->create([
+        'meeting_id' => $meeting->id,
         'assigned_to' => $assignee->id,
-        'status'      => 'pending',
+        'status' => 'pending',
     ]);
 
     $this->actingAs($assignee)
@@ -25,13 +25,13 @@ it('assignee can toggle a todo to completed', function () {
 });
 
 it('assignee can toggle a todo back to pending', function () {
-    $owner    = User::factory()->create();
+    $owner = User::factory()->create();
     $assignee = User::factory()->create();
-    $meeting  = Meeting::factory()->create(['user_id' => $owner->id]);
-    $todo     = TodoItem::factory()->create([
-        'meeting_id'  => $meeting->id,
+    $meeting = Meeting::factory()->create(['user_id' => $owner->id]);
+    $todo = TodoItem::factory()->create([
+        'meeting_id' => $meeting->id,
         'assigned_to' => $assignee->id,
-        'status'      => 'completed',
+        'status' => 'completed',
     ]);
 
     $this->actingAs($assignee)
@@ -42,11 +42,11 @@ it('assignee can toggle a todo back to pending', function () {
 });
 
 it('rejects invalid status values', function () {
-    $owner    = User::factory()->create();
+    $owner = User::factory()->create();
     $assignee = User::factory()->create();
-    $meeting  = Meeting::factory()->create(['user_id' => $owner->id]);
-    $todo     = TodoItem::factory()->create([
-        'meeting_id'  => $meeting->id,
+    $meeting = Meeting::factory()->create(['user_id' => $owner->id]);
+    $todo = TodoItem::factory()->create([
+        'meeting_id' => $meeting->id,
         'assigned_to' => $assignee->id,
     ]);
 
@@ -56,10 +56,10 @@ it('rejects invalid status values', function () {
 });
 
 it('non-owner of meeting cannot toggle a todo', function () {
-    $owner    = User::factory()->create();
+    $owner = User::factory()->create();
     $outsider = User::factory()->create();
-    $meeting  = Meeting::factory()->create(['user_id' => $owner->id]);
-    $todo     = TodoItem::factory()->create(['meeting_id' => $meeting->id]);
+    $meeting = Meeting::factory()->create(['user_id' => $owner->id]);
+    $todo = TodoItem::factory()->create(['meeting_id' => $meeting->id]);
 
     $this->actingAs($outsider)
         ->patch(route('todo-items.update', $todo), ['status' => 'completed'])
@@ -69,10 +69,10 @@ it('non-owner of meeting cannot toggle a todo', function () {
 // ─── Share link ───────────────────────────────────────────────────────────────
 
 it('owner can generate a share link for a completed meeting', function () {
-    $user    = User::factory()->create();
+    $user = User::factory()->create();
     $meeting = Meeting::factory()->create([
         'user_id' => $user->id,
-        'status'  => 'completed',
+        'status' => 'completed',
     ]);
 
     $this->actingAs($user)
@@ -83,10 +83,10 @@ it('owner can generate a share link for a completed meeting', function () {
 });
 
 it('cannot generate share link for a non-completed meeting', function () {
-    $user    = User::factory()->create();
+    $user = User::factory()->create();
     $meeting = Meeting::factory()->create([
         'user_id' => $user->id,
-        'status'  => 'processing',
+        'status' => 'processing',
     ]);
 
     $this->actingAs($user)
@@ -95,10 +95,10 @@ it('cannot generate share link for a non-completed meeting', function () {
 });
 
 it('public share page returns 200 for valid token', function () {
-    $user    = User::factory()->create();
+    $user = User::factory()->create();
     $meeting = Meeting::factory()->create([
-        'user_id'     => $user->id,
-        'status'      => 'completed',
+        'user_id' => $user->id,
+        'status' => 'completed',
         'share_token' => 'abc123testtoken',
     ]);
 
@@ -113,10 +113,10 @@ it('public share page returns 404 for invalid token', function () {
 });
 
 it('share page is not accessible for non-completed meetings', function () {
-    $user    = User::factory()->create();
+    $user = User::factory()->create();
     Meeting::factory()->create([
-        'user_id'     => $user->id,
-        'status'      => 'processing',
+        'user_id' => $user->id,
+        'status' => 'processing',
         'share_token' => 'processingtoken',
     ]);
 
@@ -125,10 +125,10 @@ it('share page is not accessible for non-completed meetings', function () {
 });
 
 it('owner can revoke a share link', function () {
-    $user    = User::factory()->create();
+    $user = User::factory()->create();
     $meeting = Meeting::factory()->create([
-        'user_id'     => $user->id,
-        'status'      => 'completed',
+        'user_id' => $user->id,
+        'status' => 'completed',
         'share_token' => 'sometoken',
     ]);
 

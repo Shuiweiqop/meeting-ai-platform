@@ -13,7 +13,12 @@ Without it, a test writing an "uploaded" file writes to the real `storage/app/pu
 
 ## Running
 - `php artisan test --parallel` or `./vendor/bin/pest --parallel` — this is the exact command CI runs (`.github/workflows/ci.yml`).
+- CI also runs `./vendor/bin/pint --test` before the test suite (config in `pint.json`) — style violations fail the build; run `./vendor/bin/pint` locally before pushing.
 - CI also runs `npm run build` after PHP tests pass — a `.jsx` change that breaks the Vite build fails CI even if every Pest test is green.
+
+## Guard tests that encode conventions
+- `tests/Unit/AgentsDocGuardTest.php` pins factual claims made in `AGENTS.md`/`.agents/*.md` (stage enum ↔ `Show.jsx`, no hardcoded Gemini model, reverb absent from `composer dev`, no static-analysis package). If it fails after your change, the doc is now stale — update the doc and the test's expectation in the same diff.
+- `tests/Unit/GeminiJsonTest.php` + `tests/Feature/ProcessMeetingPipelineTest.php` cover Gemini response parsing and `Meeting::transitionTo()` — pipeline *parsing* logic is testable without network; only the FFmpeg/Gemini transport calls remain untested by design.
 
 ## Definition of Done for a backend change
 - [ ] New/changed controller action has an auth-guard test (guest redirect) if newly authenticated, and an ownership/authorization test matching whichever `abort_if` variant applies (see [http-layer.md](http-layer.md) — single-owner, owner-or-member, or owner-or-assignee)

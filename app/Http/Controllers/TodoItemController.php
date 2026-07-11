@@ -35,15 +35,15 @@ class TodoItemController extends Controller
             ->first();
 
         return Inertia::render('Todos/Index', [
-            'todos'        => $todos,
-            'counts'       => $counts,
+            'todos' => $todos,
+            'counts' => $counts,
             'activeStatus' => $status ?? 'all',
         ]);
     }
 
     public function update(Request $request, TodoItem $todoItem): JsonResponse
     {
-        $isOwner    = $todoItem->meeting->user_id === Auth::id();
+        $isOwner = $todoItem->meeting->user_id === Auth::id();
         $isAssignee = $todoItem->assigned_to === Auth::id();
 
         abort_if(! $isOwner && ! $isAssignee, 403);

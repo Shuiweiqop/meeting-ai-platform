@@ -13,7 +13,7 @@ it('authenticated user can create a team', function () {
         ->assertRedirect();
 
     $this->assertDatabaseHas('teams', [
-        'name'     => 'Engineering',
+        'name' => 'Engineering',
         'owner_id' => $user->id,
     ]);
 
@@ -32,7 +32,7 @@ it('rejects team creation without a name', function () {
 
 it('team owner can view the team page', function () {
     $owner = User::factory()->create();
-    $team  = Team::factory()->create(['owner_id' => $owner->id]);
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
     $team->members()->attach($owner->id, ['role' => 'owner']);
 
     $this->actingAs($owner)
@@ -41,10 +41,10 @@ it('team owner can view the team page', function () {
 });
 
 it('team member can view the team page', function () {
-    $owner  = User::factory()->create();
+    $owner = User::factory()->create();
     $member = User::factory()->create();
-    $team   = Team::factory()->create(['owner_id' => $owner->id]);
-    $team->members()->attach($owner->id,  ['role' => 'owner']);
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
+    $team->members()->attach($owner->id, ['role' => 'owner']);
     $team->members()->attach($member->id, ['role' => 'member']);
 
     $this->actingAs($member)
@@ -53,9 +53,9 @@ it('team member can view the team page', function () {
 });
 
 it('non-member cannot view a team page', function () {
-    $owner    = User::factory()->create();
+    $owner = User::factory()->create();
     $outsider = User::factory()->create();
-    $team     = Team::factory()->create(['owner_id' => $owner->id]);
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
     $team->members()->attach($owner->id, ['role' => 'owner']);
 
     $this->actingAs($outsider)
@@ -66,9 +66,9 @@ it('non-member cannot view a team page', function () {
 // ─── Add member ───────────────────────────────────────────────────────────────
 
 it('owner can add a member by email', function () {
-    $owner  = User::factory()->create();
+    $owner = User::factory()->create();
     $invite = User::factory()->create();
-    $team   = Team::factory()->create(['owner_id' => $owner->id]);
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
     $team->members()->attach($owner->id, ['role' => 'owner']);
 
     $this->actingAs($owner)
@@ -80,7 +80,7 @@ it('owner can add a member by email', function () {
 
 it('returns error when inviting a non-existent email', function () {
     $owner = User::factory()->create();
-    $team  = Team::factory()->create(['owner_id' => $owner->id]);
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
     $team->members()->attach($owner->id, ['role' => 'owner']);
 
     $this->actingAs($owner)
@@ -89,10 +89,10 @@ it('returns error when inviting a non-existent email', function () {
 });
 
 it('returns error when adding an existing member', function () {
-    $owner  = User::factory()->create();
+    $owner = User::factory()->create();
     $member = User::factory()->create();
-    $team   = Team::factory()->create(['owner_id' => $owner->id]);
-    $team->members()->attach($owner->id,  ['role' => 'owner']);
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
+    $team->members()->attach($owner->id, ['role' => 'owner']);
     $team->members()->attach($member->id, ['role' => 'member']);
 
     $this->actingAs($owner)
@@ -101,11 +101,11 @@ it('returns error when adding an existing member', function () {
 });
 
 it('non-owner cannot add members', function () {
-    $owner  = User::factory()->create();
+    $owner = User::factory()->create();
     $member = User::factory()->create();
     $invite = User::factory()->create();
-    $team   = Team::factory()->create(['owner_id' => $owner->id]);
-    $team->members()->attach($owner->id,  ['role' => 'owner']);
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
+    $team->members()->attach($owner->id, ['role' => 'owner']);
     $team->members()->attach($member->id, ['role' => 'member']);
 
     $this->actingAs($member)
@@ -116,10 +116,10 @@ it('non-owner cannot add members', function () {
 // ─── Remove member ────────────────────────────────────────────────────────────
 
 it('owner can remove a member', function () {
-    $owner  = User::factory()->create();
+    $owner = User::factory()->create();
     $member = User::factory()->create();
-    $team   = Team::factory()->create(['owner_id' => $owner->id]);
-    $team->members()->attach($owner->id,  ['role' => 'owner']);
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
+    $team->members()->attach($owner->id, ['role' => 'owner']);
     $team->members()->attach($member->id, ['role' => 'member']);
 
     $this->actingAs($owner)
@@ -131,7 +131,7 @@ it('owner can remove a member', function () {
 
 it('owner cannot remove themselves', function () {
     $owner = User::factory()->create();
-    $team  = Team::factory()->create(['owner_id' => $owner->id]);
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
     $team->members()->attach($owner->id, ['role' => 'owner']);
 
     $this->actingAs($owner)
@@ -143,7 +143,7 @@ it('owner cannot remove themselves', function () {
 
 it('owner can delete a team', function () {
     $owner = User::factory()->create();
-    $team  = Team::factory()->create(['owner_id' => $owner->id]);
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
     $team->members()->attach($owner->id, ['role' => 'owner']);
 
     $this->actingAs($owner)
@@ -154,10 +154,10 @@ it('owner can delete a team', function () {
 });
 
 it('non-owner cannot delete a team', function () {
-    $owner  = User::factory()->create();
+    $owner = User::factory()->create();
     $member = User::factory()->create();
-    $team   = Team::factory()->create(['owner_id' => $owner->id]);
-    $team->members()->attach($owner->id,  ['role' => 'owner']);
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
+    $team->members()->attach($owner->id, ['role' => 'owner']);
     $team->members()->attach($member->id, ['role' => 'member']);
 
     $this->actingAs($member)

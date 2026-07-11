@@ -3,7 +3,6 @@
 namespace App\Events;
 
 use App\Models\Meeting;
-use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
@@ -27,8 +26,8 @@ class MeetingStatusUpdated implements ShouldBroadcast
     public function broadcastWith(): array
     {
         return [
-            'status'              => $this->meeting->status,
-            'processing_stage'    => $this->meeting->processing_stage,
+            'status' => $this->meeting->status,
+            'processing_stage' => $this->meeting->processing_stage,
             'extraction_progress' => $this->extractionProgress,
         ];
     }

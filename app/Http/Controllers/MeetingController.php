@@ -34,7 +34,7 @@ class MeetingController extends Controller
 
         return Inertia::render('Meeting/Index', [
             'meetings' => $meetings,
-            'filters'  => ['search' => $search ?? '', 'status' => $status ?? ''],
+            'filters' => ['search' => $search ?? '', 'status' => $status ?? ''],
         ]);
     }
 
@@ -50,7 +50,7 @@ class MeetingController extends Controller
     public function store(StoreMeetingRequest $request): RedirectResponse
     {
         $uploaded = $request->file('audio_file');
-        $isVideo  = str_starts_with($uploaded->getMimeType(), 'video/');
+        $isVideo = str_starts_with($uploaded->getMimeType(), 'video/');
 
         if ($isVideo) {
             $audioPath = $this->extractAudio($uploaded->getRealPath());
@@ -59,12 +59,12 @@ class MeetingController extends Controller
         }
 
         $meeting = Meeting::create([
-            'user_id'     => Auth::id(),
-            'team_id'     => $request->team_id ?: null,
-            'title'       => $request->title,
+            'user_id' => Auth::id(),
+            'team_id' => $request->team_id ?: null,
+            'title' => $request->title,
             'description' => $request->description,
-            'audio_path'  => $audioPath,
-            'status'      => 'pending',
+            'audio_path' => $audioPath,
+            'status' => 'pending',
         ]);
 
         ProcessMeetingJob::dispatch($meeting);
@@ -74,14 +74,14 @@ class MeetingController extends Controller
 
     private function extractAudio(string $videoPath): string
     {
-        $filename  = 'meetings/' . Str::uuid() . '.mp3';
+        $filename = 'meetings/'.Str::uuid().'.mp3';
         $outputPath = Storage::disk('public')->path($filename);
 
         Storage::disk('public')->makeDirectory('meetings');
 
         $ffmpeg = FFMpeg::create();
-        $video  = $ffmpeg->open($videoPath);
-        $video->save(new Mp3(), $outputPath);
+        $video = $ffmpeg->open($videoPath);
+        $video->save(new Mp3, $outputPath);
 
         return $filename;
     }
@@ -104,7 +104,7 @@ class MeetingController extends Controller
         $meeting->transcript?->delete();
         $meeting->aiSummary?->delete();
         $meeting->todoItems()->delete();
-        $meeting->update(['status' => 'pending']);
+        $meeting->transitionTo('pending');
 
         ProcessMeetingJob::dispatch($meeting);
 
@@ -120,7 +120,7 @@ class MeetingController extends Controller
         $pdf = Pdf::loadView('pdf.meeting', ['meeting' => $meeting])
             ->setPaper('a4', 'portrait');
 
-        $filename = Str::slug($meeting->title) . '-summary.pdf';
+        $filename = Str::slug($meeting->title).'-summary.pdf';
 
         return $pdf->download($filename);
     }
@@ -139,7 +139,7 @@ class MeetingController extends Controller
         abort_if($meeting->user_id !== Auth::id(), 403);
 
         $validated = $request->validate([
-            'title'       => ['required', 'string', 'max:255'],
+            'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
         ]);
 
