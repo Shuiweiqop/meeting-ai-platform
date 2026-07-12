@@ -8,8 +8,8 @@ Not sunk into code: nothing blocks a test file living in the wrong directory or 
 ## Why every Feature test needs `RefreshDatabase`, and how it's actually wired
 `tests/Pest.php` applies `RefreshDatabase` globally to everything under `tests/Feature` via `pest()->extend(TestCase::class)->use(RefreshDatabase::class)->in('Feature')`. A test file placed outside `tests/Feature`/`tests/Unit` does not get this binding — it would share database state across tests with no isolation, producing failures that depend on run order rather than the code under test.
 
-## `Storage::fake('public')` for upload tests
-Without it, a test writing an "uploaded" file writes to the real `storage/app/public` disk on whatever machine runs the test — including CI, where it either pollutes the runner or fails on a missing directory `storage/app/public/meetings/` was never guaranteed to exist.
+## `Storage::fake('local')` for upload/audio tests
+Meeting audio lives on the **private `local` disk** (never `public` — see [http-layer.md](http-layer.md) on the audio route). Without the fake, a test writing an "uploaded" file writes to the real `storage/app/private` disk on whatever machine runs the test — including CI, where it either pollutes the runner or fails on a directory that was never guaranteed to exist. Faking `'public'` here is a bug: the code under test writes to `'local'`, so assertions would pass/fail against the wrong disk.
 
 ## Running
 - `php artisan test --parallel` or `./vendor/bin/pest --parallel` — this is the exact command CI runs (`.github/workflows/ci.yml`).

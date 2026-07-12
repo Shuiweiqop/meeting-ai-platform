@@ -61,7 +61,7 @@ it('filters meetings by status', function () {
 
 it('uploads an audio file and dispatches processing job', function () {
     Queue::fake();
-    Storage::fake('public');
+    Storage::fake('local');
 
     $user = User::factory()->create();
     $file = UploadedFile::fake()->create('meeting.mp3', 500, 'audio/mpeg');
@@ -80,7 +80,7 @@ it('uploads an audio file and dispatches processing job', function () {
     ]);
 
     Queue::assertPushed(ProcessMeetingJob::class);
-    Storage::disk('public')->assertExists('meetings/'.$file->hashName());
+    Storage::disk('local')->assertExists('meetings/'.$file->hashName());
 });
 
 it('rejects upload without a title', function () {
@@ -125,7 +125,7 @@ it('returns 403 when another user tries to view a meeting', function () {
 // ─── Delete ───────────────────────────────────────────────────────────────────
 
 it('owner can delete their meeting', function () {
-    Storage::fake('public');
+    Storage::fake('local');
 
     $user = User::factory()->create();
     $meeting = Meeting::factory()->create([
@@ -150,6 +150,50 @@ it('returns 403 when another user tries to delete a meeting', function () {
         ->assertForbidden();
 
     $this->assertDatabaseHas('meetings', ['id' => $meeting->id]);
+});
+
+// ─── Audio streaming ──────────────────────────────────────────────────────────
+
+it('streams audio to the meeting owner', function () {
+    Storage::fake('local');
+    Storage::disk('local')->put('meetings/test.mp3', 'fake-audio-bytes');
+
+    $user = User::factory()->create();
+    $meeting = Meeting::factory()->create(['user_id' => $user->id, 'audio_path' => 'meetings/test.mp3']);
+
+    $this->actingAs($user)
+        ->get(route('meetings.audio', $meeting))
+        ->assertOk();
+});
+
+it('returns 403 when another user requests the audio', function () {
+    Storage::fake('local');
+    Storage::disk('local')->put('meetings/test.mp3', 'fake-audio-bytes');
+
+    $owner = User::factory()->create();
+    $other = User::factory()->create();
+    $meeting = Meeting::factory()->create(['user_id' => $owner->id, 'audio_path' => 'meetings/test.mp3']);
+
+    $this->actingAs($other)
+        ->get(route('meetings.audio', $meeting))
+        ->assertForbidden();
+});
+
+it('redirects guests requesting audio', function () {
+    $meeting = Meeting::factory()->create();
+
+    $this->get(route('meetings.audio', $meeting))->assertRedirect(route('login'));
+});
+
+it('returns 404 when the audio file is missing from disk', function () {
+    Storage::fake('local');
+
+    $user = User::factory()->create();
+    $meeting = Meeting::factory()->create(['user_id' => $user->id, 'audio_path' => 'meetings/gone.mp3']);
+
+    $this->actingAs($user)
+        ->get(route('meetings.audio', $meeting))
+        ->assertNotFound();
 });
 
 // ─── Retry ────────────────────────────────────────────────────────────────────

@@ -14,7 +14,10 @@ use App\Models\User;
 use App\Support\GeminiJson;
 use FFMpeg\FFMpeg;
 use FFMpeg\Format\Audio\Mp3 as Mp3Format;
+use Gemini\Client;
 use Gemini\Data\Blob;
+use Gemini\Data\UploadedFile;
+use Gemini\Enums\FileState;
 use Gemini\Enums\MimeType;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -34,6 +37,9 @@ class ProcessMeetingJob implements ShouldBeUnique, ShouldQueue
     public int $timeout = 600;
 
     public int $uniqueFor = 3600;
+
+    // Keep safely under the ~20 MB Gemini inline-request cap (prompt included).
+    private const INLINE_AUDIO_LIMIT_BYTES = 15 * 1024 * 1024;
 
     private ?string $extractedAudioPath = null;
 
@@ -109,9 +115,9 @@ class ProcessMeetingJob implements ShouldBeUnique, ShouldQueue
 
     private function extractAudio(): string
     {
-        $sourcePath = Storage::disk('public')->path($this->meeting->audio_path);
+        $sourcePath = Storage::disk('local')->path($this->meeting->audio_path);
         $relativePath = 'meetings/tmp_'.$this->meeting->id.'.mp3';
-        $outputPath = Storage::disk('public')->path($relativePath);
+        $outputPath = Storage::disk('local')->path($relativePath);
 
         $format = new Mp3Format;
         $lastPct = -1;
@@ -135,7 +141,7 @@ class ProcessMeetingJob implements ShouldBeUnique, ShouldQueue
     private function cleanupExtractedAudio(): void
     {
         if ($this->extractedAudioPath) {
-            Storage::disk('public')->delete($this->extractedAudioPath);
+            Storage::disk('local')->delete($this->extractedAudioPath);
             $this->extractedAudioPath = null;
         }
     }
@@ -154,9 +160,8 @@ class ProcessMeetingJob implements ShouldBeUnique, ShouldQueue
     private function transcribe(array $participantNames = [], ?string $audioStoragePath = null): array
     {
         $storagePath = $audioStoragePath ?? $this->meeting->audio_path;
-        $audioPath = Storage::disk('public')->path($storagePath);
+        $audioPath = Storage::disk('local')->path($storagePath);
         $mimeType = $this->resolveMimeType($storagePath);
-        $audioData = base64_encode(file_get_contents($audioPath));
 
         $nameHint = count($participantNames) > 0
             ? 'The following people may be present: '.implode(', ', $participantNames).'. '.
@@ -176,10 +181,45 @@ PROMPT;
 
         $client = \Gemini::client(config('services.gemini.key'));
         $raw = $client->generativeModel(model: config('services.gemini.model'))
-            ->generateContent([new Blob(mimeType: $mimeType, data: $audioData), $prompt])
+            ->generateContent([$this->audioPartFor($client, $audioPath, $mimeType), $prompt])
             ->text();
 
         return $this->parseSegments($raw);
+    }
+
+    /**
+     * Inline base64 audio is capped by the Gemini API (~20 MB per request) and
+     * by PHP memory (base64 inflates ~33%), so long meetings hard-fail if sent
+     * inline. Larger files go through the Files API: upload once, poll until
+     * ACTIVE, reference by URI. Uploaded files auto-expire after 48 h.
+     */
+    private function audioPartFor(Client $client, string $audioPath, MimeType $mimeType): Blob|UploadedFile
+    {
+        if (filesize($audioPath) <= self::INLINE_AUDIO_LIMIT_BYTES) {
+            return new Blob(mimeType: $mimeType, data: base64_encode(file_get_contents($audioPath)));
+        }
+
+        $file = $client->files()->upload(
+            filename: $audioPath,
+            mimeType: $mimeType,
+            displayName: "meeting_{$this->meeting->id}",
+        );
+        Log::info("ProcessMeetingJob [{$this->meeting->id}]: audio uploaded to Files API → {$file->uri}");
+
+        $deadline = time() + 300;
+        while (! $file->state->complete()) {
+            if (time() >= $deadline) {
+                throw new \RuntimeException('Gemini Files API file processing timed out after 300s.');
+            }
+            sleep(5);
+            $file = $client->files()->metadataGet($file->uri);
+        }
+
+        if ($file->state !== FileState::Active) {
+            throw new \RuntimeException("Gemini Files API file ended in state [{$file->state->value}].");
+        }
+
+        return new UploadedFile(fileUri: $file->uri, mimeType: $mimeType);
     }
 
     private function parseSegments(string $raw): array

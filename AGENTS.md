@@ -8,6 +8,7 @@ Requires: Docker (MySQL container on host port `3307`, Redis on `16379` — see 
 - `docker compose up -d` (or `docker start meeting_ai_mysql meeting_ai_redis` if containers already exist)
 - `composer run dev` — concurrently runs `php artisan serve` + `queue:listen` + `pail` (log tail) + `vite` (defined in `composer.json` → `scripts.dev`)
 - `php artisan reverb:start` — WebSocket server; NOT part of `composer dev`, must be started separately in its own terminal (confirmed absent from the `scripts.dev` concurrently list)
+- `php artisan schedule:work` — runs the scheduler (needed for `meetings:fail-stuck`, the stuck-meeting rescue; see `routes/console.php`); also separate from `composer dev`
 - `php artisan test --parallel` or `./vendor/bin/pest --parallel` — matches `.github/workflows/ci.yml` exactly
 - `npm run build` — production frontend build (also the CI step)
 

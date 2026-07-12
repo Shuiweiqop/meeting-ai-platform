@@ -4,7 +4,12 @@ Partially sunk into code: stage/status writes go through `Meeting::transitionTo(
 
 ## Flow
 `MeetingController::store` / `ChunkUploadController::merge` save the upload, create a `Meeting` (`status: pending`), dispatch `ProcessMeetingJob`. The job runs four sequential stages (`App\Enums\ProcessingStage` cases), each calling `updateStage()` → `Meeting::transitionTo()` (persists `processing_stage` + broadcasts `MeetingStatusUpdated` on `PrivateChannel('meetings.{id}')`):
-`extracting_audio` → `transcribing` → `mapping_speakers` → `summarizing`. On success: `status: completed`, `processing_stage: null`, cleanup temp audio, then email + Slack. On any uncaught exception: `failed()` hook sets `status: failed`, clears stage, logs, and cleans up temp audio.
+`extracting_audio` → `transcribing` → `mapping_speakers` → `summarizing`. On success: `status: completed`, `processing_stage: null`, cleanup temp audio, then email + Slack. On any uncaught exception: `failed()` hook sets `status: failed`, clears stage, logs, and cleans up temp audio. Audio files live on the private `local` disk (see [http-layer.md](http-layer.md)).
+
+If a job is *lost* (dead worker) rather than failed, the meeting would sit in `processing` forever and retry would be silently swallowed by the `ShouldBeUnique` lock — `meetings:fail-stuck` (scheduled every 10 min in `routes/console.php`, needs `schedule:work`/cron) marks stale-`processing` meetings failed and releases the lock so the owner's retry button works.
+
+## Transcription audio transport: inline vs Files API
+`audioPartFor()` sends audio ≤ 15 MB (`INLINE_AUDIO_LIMIT_BYTES`) inline as base64 `Blob`; anything larger is uploaded via the Gemini **Files API** (`$client->files()->upload()`), polled until `ACTIVE` (300 s deadline), and referenced by URI (`UploadedFile`). Don't raise the inline limit — the API caps inline requests around 20 MB and base64 inflates by ~33% in PHP memory. Files API uploads auto-expire server-side after 48 h; we don't delete them explicitly. A `FAILED` file state or poll timeout throws, which correctly bubbles to retry/`failed()`.
 
 ## Why there's no try/catch inside `handle()`
 Laravel's retry mechanism (`$tries = 3`) and the `failed()` hook *are* the error handling. If you wrap a stage in `try { ... } catch (\Throwable $e) { Log::error(...); return; }`, the job returns normally — Laravel considers it a successful run, the retry never fires, and `failed()` never runs. The meeting is left stuck in `processing` forever with no transcript, no summary, and no user-visible failure state. This has no test guarding it (see enforcement note above) — think it through by hand before adding any catch inside a stage.

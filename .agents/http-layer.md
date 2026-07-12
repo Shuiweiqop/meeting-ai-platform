@@ -10,6 +10,9 @@ Every mutating/viewing action on a user-owned resource checks ownership with `ab
 
 Picking the wrong variant for a new action is the actual risk: applying single-owner logic to a team-scoped or assignment-scoped resource locks out people who should have access (e.g. a team member trying to view a team, or an assignee trying to complete their own todo) rather than merely being over-permissive. Check which relationship — ownership, membership, or assignment — actually governs the resource before copying a pattern.
 
+## Audio is served through a guarded route, never a public URL
+Recordings live on the private `local` disk; `MeetingController::audio` (`GET /meetings/{meeting}/audio`) is the only way to reach them, behind the single-owner `abort_if`. Never store meeting audio on the `public` disk or link it via `/storage/...` — that hands out the uploader's raw recording to anyone holding the URL, with no revocation. The response is a `BinaryFileResponse` because `<audio>` seeking needs HTTP Range support.
+
 ## The one route with no auth
 `SharedMeetingController::show` (`/share/{token}`) is intentionally outside the `auth` middleware group — it's the public share-link view. It scopes by `share_token` + `status = 'completed'`, not by user. Anything added to this method must not assume `Auth::id()` is available, and must not eager-load or expose fields beyond what a public viewer should see (e.g. don't add the uploader's email to the `Inertia::render` payload here).
 

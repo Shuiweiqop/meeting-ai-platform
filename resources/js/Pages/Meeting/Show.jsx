@@ -134,7 +134,7 @@ function AudioTranscriptSync({ meeting, segments }) {
             meetingId:    meeting.id,
             meetingTitle: meeting.title,
             meetingHref:  route('meetings.show', meeting.id),
-            audioUrl:     `/storage/${meeting.audio_path}`,
+            audioUrl:     route('meetings.audio', meeting.id),
         });
     }, [meeting.id]);
 
@@ -339,7 +339,7 @@ function TodoRow({ todo: initial }) {
 // ─── Page ──────────────────────────────────────────────────────────────────
 
 export default function Show({ meeting }) {
-    const audioUrl       = meeting.audio_path ? `/storage/${meeting.audio_path}` : null;
+    const audioUrl       = meeting.audio_path ? route('meetings.audio', meeting.id) : null;
     const isProcessing   = meeting.status === 'pending' || meeting.status === 'processing';
     const segments       = meeting.transcript?.segments ?? null;
     const shareUrl       = meeting.share_token ? `${window.location.origin}/share/${meeting.share_token}` : null;

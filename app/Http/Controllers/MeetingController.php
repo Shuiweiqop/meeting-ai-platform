@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class MeetingController extends Controller
 {
@@ -55,7 +56,7 @@ class MeetingController extends Controller
         if ($isVideo) {
             $audioPath = $this->extractAudio($uploaded->getRealPath());
         } else {
-            $audioPath = $uploaded->store('meetings', 'public');
+            $audioPath = $uploaded->store('meetings', 'local');
         }
 
         $meeting = Meeting::create([
@@ -75,9 +76,9 @@ class MeetingController extends Controller
     private function extractAudio(string $videoPath): string
     {
         $filename = 'meetings/'.Str::uuid().'.mp3';
-        $outputPath = Storage::disk('public')->path($filename);
+        $outputPath = Storage::disk('local')->path($filename);
 
-        Storage::disk('public')->makeDirectory('meetings');
+        Storage::disk('local')->makeDirectory('meetings');
 
         $ffmpeg = FFMpeg::create();
         $video = $ffmpeg->open($videoPath);
@@ -93,6 +94,17 @@ class MeetingController extends Controller
         return Inertia::render('Meeting/Show', [
             'meeting' => $meeting->load(['transcript', 'aiSummary', 'todoItems.assignee']),
         ]);
+    }
+
+    // Audio lives on the private local disk (never the public one — recordings
+    // must not be reachable without this ownership check). BinaryFileResponse
+    // handles HTTP Range requests, which <audio> seeking depends on.
+    public function audio(Meeting $meeting): BinaryFileResponse
+    {
+        abort_if($meeting->user_id !== Auth::id(), 403);
+        abort_unless($meeting->audio_path && Storage::disk('local')->exists($meeting->audio_path), 404);
+
+        return response()->file(Storage::disk('local')->path($meeting->audio_path));
     }
 
     public function retry(Meeting $meeting): RedirectResponse
@@ -153,7 +165,7 @@ class MeetingController extends Controller
         abort_if($meeting->user_id !== Auth::id(), 403);
 
         if ($meeting->audio_path) {
-            Storage::disk('public')->delete($meeting->audio_path);
+            Storage::disk('local')->delete($meeting->audio_path);
         }
 
         $meeting->delete();

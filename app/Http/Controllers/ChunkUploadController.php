@@ -50,9 +50,9 @@ class ChunkUploadController extends Controller
         abort_if(! in_array($ext, self::ALLOWED_EXT, true), 422, 'Unsupported file type.');
 
         $finalRelPath = 'meetings/'.Str::uuid().'.'.$ext;
-        $finalAbsPath = Storage::disk('public')->path($finalRelPath);
+        $finalAbsPath = Storage::disk('local')->path($finalRelPath);
 
-        Storage::disk('public')->makeDirectory('meetings');
+        Storage::disk('local')->makeDirectory('meetings');
 
         $out = fopen($finalAbsPath, 'wb');
 

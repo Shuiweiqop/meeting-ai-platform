@@ -28,6 +28,7 @@ Route::middleware('auth')->group(function () {
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 
     Route::resource('meetings', MeetingController::class);
+    Route::get('/meetings/{meeting}/audio', [MeetingController::class, 'audio'])->name('meetings.audio');
     Route::get('/meetings/{meeting}/export', [MeetingController::class, 'exportPdf'])->name('meetings.export');
     Route::post('/meetings/{meeting}/retry', [MeetingController::class, 'retry'])->name('meetings.retry');
     Route::post('/meetings/{meeting}/share', [SharedMeetingController::class, 'generate'])->name('meetings.share.generate');
