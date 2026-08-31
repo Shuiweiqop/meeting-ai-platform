@@ -22,7 +22,10 @@ export default function ResetPassword({ token, email }) {
     };
 
     return (
-        <GuestLayout>
+        <GuestLayout
+            title="Reset password"
+            subtitle="Choose a new password for your account."
+        >
             <Head title="Reset Password" />
 
             <form onSubmit={submit}>
@@ -83,11 +86,12 @@ export default function ResetPassword({ token, email }) {
                     />
                 </div>
 
-                <div className="mt-4 flex items-center justify-end">
-                    <PrimaryButton className="ms-4" disabled={processing}>
-                        Reset Password
-                    </PrimaryButton>
-                </div>
+                <PrimaryButton
+                    className="mt-6 w-full justify-center py-2.5"
+                    disabled={processing}
+                >
+                    Reset password
+                </PrimaryButton>
             </form>
         </GuestLayout>
     );

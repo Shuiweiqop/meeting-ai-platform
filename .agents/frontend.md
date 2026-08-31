@@ -2,6 +2,11 @@
 
 Not sunk into code: no React ErrorBoundary exists, no ESLint config exists. See [../AGENTS.md](../AGENTS.md) "Status of enforcement".
 
+## Reuse existing components — don't reinvent one that exists
+Before writing markup, check `resources/js/Components/` and use what's there. Current shared components: `TextInput`, `InputLabel`, `InputError`, `Checkbox`, `PrimaryButton`, `SecondaryButton`, `DangerButton`, `Modal`, `Dropdown`, `NavLink`, `ResponsiveNavLink`, `ApplicationLogo`, `GlobalAudioPlayer`. A form field is `InputLabel` + `TextInput` + `InputError`, never a hand-rolled `<input>`; a primary action is `PrimaryButton`, never a bare styled `<button>`.
+
+If a page needs a variant, **extend the shared component with a prop** (e.g. `GuestLayout` gained `title`/`subtitle` so all six auth pages render a consistent header from one place) rather than copy-pasting a new bespoke version. Only create a new component in `Components/` when the same markup is needed in two or more places and nothing existing covers it — and put it there, not inline in a page. Duplicated inline markup that drifts out of sync is the failure this prevents (e.g. the six auth pages previously each styled their own submit button + footer link slightly differently).
+
 ## Page-to-controller naming is a real contract, not a convention to imitate for style
 `Inertia::render('Domain/Action', ...)` on the PHP side must match `resources/js/Pages/Domain/Action.jsx` exactly, including case — Inertia resolves the component path at runtime with no compile-time check. A mismatch is a runtime 500 (component not found), not a type error caught earlier. When adding a controller method that renders a new page, create the matching file first or the request will fail with no clue pointing at the naming mismatch specifically.
 

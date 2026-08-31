@@ -22,7 +22,10 @@ export default function Register() {
     };
 
     return (
-        <GuestLayout>
+        <GuestLayout
+            title="Create your account"
+            subtitle="Start turning meetings into summaries and action items."
+        >
             <Head title="Register" />
 
             <form onSubmit={submit}>
@@ -102,18 +105,22 @@ export default function Register() {
                     />
                 </div>
 
-                <div className="mt-4 flex items-center justify-end">
+                <PrimaryButton
+                    className="mt-6 w-full justify-center py-2.5"
+                    disabled={processing}
+                >
+                    Create account
+                </PrimaryButton>
+
+                <p className="mt-6 text-center text-sm text-gray-500">
+                    Already have an account?{' '}
                     <Link
                         href={route('login')}
-                        className="rounded-md text-sm text-gray-600 underline hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                        className="font-semibold text-indigo-600 hover:text-indigo-500"
                     >
-                        Already registered?
+                        Log in
                     </Link>
-
-                    <PrimaryButton className="ms-4" disabled={processing}>
-                        Register
-                    </PrimaryButton>
-                </div>
+                </p>
             </form>
         </GuestLayout>
     );
