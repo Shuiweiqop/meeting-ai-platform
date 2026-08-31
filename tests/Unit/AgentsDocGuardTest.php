@@ -39,11 +39,16 @@ it('has no hardcoded Gemini model string outside config', function () {
     }
 });
 
-// AGENTS.md commands: reverb:start is intentionally NOT part of composer dev.
-it('still excludes reverb from the composer dev script', function () {
+// AGENTS.md commands: composer dev is the single-command launcher for every
+// app process (all but Docker). If a process is dropped from the script, the
+// docs promising "one command, six processes" have gone stale.
+it('keeps every app process in the composer dev script', function () {
     $composer = json_decode(file_get_contents(repoPath('composer.json')), true);
+    $dev = json_encode($composer['scripts']['dev']);
 
-    expect(json_encode($composer['scripts']['dev']))->not->toContain('reverb');
+    foreach (['artisan serve', 'queue:listen', 'pail', 'npm run dev', 'reverb:start', 'schedule:work'] as $process) {
+        expect($dev)->toContain($process);
+    }
 });
 
 // AGENTS.md "Status of enforcement": update that section if static analysis arrives.

@@ -6,9 +6,8 @@ Laravel 13 + React/Inertia app that turns uploaded meeting audio/video into tran
 Requires: Docker (MySQL container on host port `3307`, Redis on `16379` — see `docker-compose.yml`), PHP 8.3, Node 20, FFmpeg binary on PATH (used by `php-ffmpeg/php-ffmpeg`, not bundled).
 - `composer install && npm install`
 - `docker compose up -d` (or `docker start meeting_ai_mysql meeting_ai_redis` if containers already exist)
-- `composer run dev` — concurrently runs `php artisan serve` + `queue:listen` + `pail` (log tail) + `vite` (defined in `composer.json` → `scripts.dev`)
-- `php artisan reverb:start` — WebSocket server; NOT part of `composer dev`, must be started separately in its own terminal (confirmed absent from the `scripts.dev` concurrently list)
-- `php artisan schedule:work` — runs the scheduler (needed for `meetings:fail-stuck`, the stuck-meeting rescue; see `routes/console.php`); also separate from `composer dev`
+- `composer run dev` — one command, six concurrent processes via `concurrently`: `php artisan serve` + `queue:listen` + `pail` (log tail) + `vite` + `reverb:start` (WebSocket server) + `schedule:work` (scheduler for `meetings:fail-stuck`). Defined in `composer.json` → `scripts.dev`. Killing the command (`--kill-others`) stops all six.
+- The only thing `composer dev` does NOT start is Docker (MySQL + Redis) — start that first with `docker compose up -d`.
 - `php artisan test --parallel` or `./vendor/bin/pest --parallel` — matches `.github/workflows/ci.yml` exactly
 - `npm run build` — production frontend build (also the CI step)
 
