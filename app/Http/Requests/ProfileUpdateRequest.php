@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\Models\User;
+use App\Rules\SlackWebhookUrl;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -26,7 +27,7 @@ class ProfileUpdateRequest extends FormRequest
                 'max:255',
                 Rule::unique(User::class)->ignore($this->user()->id),
             ],
-            'slack_webhook_url' => ['nullable', 'url', 'max:500'],
+            'slack_webhook_url' => ['nullable', 'url', 'max:500', new SlackWebhookUrl],
         ];
     }
 }

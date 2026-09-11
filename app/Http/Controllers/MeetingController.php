@@ -90,7 +90,7 @@ class MeetingController extends Controller
 
     public function show(Meeting $meeting): Response
     {
-        abort_if($meeting->user_id !== Auth::id(), 403);
+        abort_unless($meeting->isAccessibleBy(Auth::user()), 403);
 
         return Inertia::render('Meeting/Show', [
             'meeting' => $meeting->load(['transcript', 'aiSummary', 'todoItems.assignee']),
@@ -102,7 +102,7 @@ class MeetingController extends Controller
     // handles HTTP Range requests, which <audio> seeking depends on.
     public function audio(Meeting $meeting): BinaryFileResponse
     {
-        abort_if($meeting->user_id !== Auth::id(), 403);
+        abort_unless($meeting->isAccessibleBy(Auth::user()), 403);
         abort_unless($meeting->audio_path && Storage::disk('local')->exists($meeting->audio_path), 404);
 
         return response()->file(Storage::disk('local')->path($meeting->audio_path));
@@ -110,7 +110,7 @@ class MeetingController extends Controller
 
     public function retry(Meeting $meeting): RedirectResponse
     {
-        abort_if($meeting->user_id !== Auth::id(), 403);
+        abort_unless($meeting->isManageableBy(Auth::user()), 403);
         abort_if($meeting->status !== 'failed', 422);
 
         // Clean up previous partial results
@@ -126,7 +126,7 @@ class MeetingController extends Controller
 
     public function exportPdf(Meeting $meeting): HttpResponse
     {
-        abort_if($meeting->user_id !== Auth::id(), 403);
+        abort_unless($meeting->isAccessibleBy(Auth::user()), 403);
 
         $meeting->load(['transcript', 'aiSummary', 'todoItems.assignee']);
 
@@ -140,7 +140,7 @@ class MeetingController extends Controller
 
     public function edit(Meeting $meeting): Response
     {
-        abort_if($meeting->user_id !== Auth::id(), 403);
+        abort_unless($meeting->isManageableBy(Auth::user()), 403);
 
         return Inertia::render('Meeting/Edit', [
             'meeting' => $meeting,
@@ -149,7 +149,7 @@ class MeetingController extends Controller
 
     public function update(Request $request, Meeting $meeting): RedirectResponse
     {
-        abort_if($meeting->user_id !== Auth::id(), 403);
+        abort_unless($meeting->isManageableBy(Auth::user()), 403);
 
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:255'],
@@ -163,7 +163,7 @@ class MeetingController extends Controller
 
     public function destroy(Meeting $meeting): RedirectResponse
     {
-        abort_if($meeting->user_id !== Auth::id(), 403);
+        abort_unless($meeting->isManageableBy(Auth::user()), 403);
 
         if ($meeting->audio_path) {
             Storage::disk('local')->delete($meeting->audio_path);

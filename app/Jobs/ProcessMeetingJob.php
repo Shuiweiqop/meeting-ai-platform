@@ -11,6 +11,7 @@ use App\Models\Meeting;
 use App\Models\TodoItem;
 use App\Models\Transcript;
 use App\Models\User;
+use App\Rules\SlackWebhookUrl;
 use App\Support\GeminiJson;
 use FFMpeg\FFMpeg;
 use FFMpeg\Format\Audio\Mp3 as Mp3Format;
@@ -397,6 +398,16 @@ PROMPT;
         if (! $webhookUrl) {
             return;
         }
+
+        // Defense in depth: input validation blocks non-Slack hosts at save
+        // time, but a row that predates that rule could still be POSTed to here.
+        // Re-check the host so the worker never sends to an arbitrary URL (SSRF).
+        if (parse_url($webhookUrl, PHP_URL_HOST) !== SlackWebhookUrl::ALLOWED_HOST) {
+            Log::warning("ProcessMeetingJob [{$this->meeting->id}]: skipped Slack notify — non-Slack webhook host.");
+
+            return;
+        }
+
         $summary = $meeting->aiSummary?->summary ?? 'No summary generated.';
         $todoLines = $meeting->todoItems->map(fn ($t) => "• {$t->title}".($t->assignee ? " → {$t->assignee->name}" : ''))->implode("\n");
         $text = "*Meeting Ready: {$meeting->title}*\n\n{$summary}";

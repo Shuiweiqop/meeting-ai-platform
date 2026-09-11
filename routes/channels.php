@@ -7,9 +7,11 @@ Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
     return (int) $user->id === (int) $id;
 });
 
-// Private channel — only the meeting uploader can listen
+// Private channel — the uploader and (for team meetings) team members can
+// listen, matching Meeting::isAccessibleBy so live progress reaches everyone
+// who can open the meeting page.
 Broadcast::channel('meetings.{meetingId}', function ($user, $meetingId) {
-    return Meeting::where('id', $meetingId)
-        ->where('user_id', $user->id)
-        ->exists();
+    $meeting = Meeting::with('team')->find($meetingId);
+
+    return $meeting && $meeting->isAccessibleBy($user);
 });

@@ -12,7 +12,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 
-#[Fillable(['team_id', 'user_id', 'title', 'description', 'audio_path', 'status', 'processing_stage', 'duration_seconds', 'share_token', 'meeting_date'])]
+#[Fillable(['team_id', 'user_id', 'title', 'description', 'audio_path', 'status', 'processing_stage', 'duration_seconds', 'share_token', 'share_expires_at', 'meeting_date'])]
 class Meeting extends Model
 {
     use HasFactory;
@@ -22,7 +22,19 @@ class Meeting extends Model
         return [
             'duration_seconds' => 'integer',
             'meeting_date' => 'datetime',
+            'share_expires_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Whether the public share link is currently usable: a token exists and
+     * hasn't expired. The share route and the owner's UI both read this so the
+     * "active" definition lives in one place.
+     */
+    public function hasActiveShareLink(): bool
+    {
+        return $this->share_token
+            && (! $this->share_expires_at || $this->share_expires_at->isFuture());
     }
 
     /**
@@ -54,6 +66,35 @@ class Meeting extends Model
 
         $this->update(['status' => $status, 'processing_stage' => $stage?->value]);
         broadcast(new MeetingStatusUpdated($this));
+    }
+
+    /**
+     * Who may VIEW this meeting (show page, audio stream, PDF export, todos).
+     * The uploader always can; if the meeting belongs to a team, every member
+     * of that team can too. This is the single definition of read access —
+     * controllers call it instead of re-deriving `user_id === Auth::id()`, so
+     * viewing rules can't drift apart across the seven meeting actions.
+     */
+    public function isAccessibleBy(User $user): bool
+    {
+        if ($this->user_id === $user->id) {
+            return true;
+        }
+
+        return $this->team_id !== null && $this->team
+            && ($this->team->owner_id === $user->id
+                || $this->team->members()->where('users.id', $user->id)->exists());
+    }
+
+    /**
+     * Who may MANAGE this meeting (edit, update, delete, retry, share links).
+     * Only the uploader — team membership grants read access, never the right
+     * to change or delete someone else's recording. Kept separate from
+     * isAccessibleBy on purpose: widening viewing must not widen mutation.
+     */
+    public function isManageableBy(User $user): bool
+    {
+        return $this->user_id === $user->id;
     }
 
     public function team(): BelongsTo

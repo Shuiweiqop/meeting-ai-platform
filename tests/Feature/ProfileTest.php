@@ -33,6 +33,46 @@ test('profile information can be updated', function () {
     $this->assertNull($user->email_verified_at);
 });
 
+test('a valid Slack webhook url is accepted', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user)
+        ->patch('/profile', [
+            'name' => $user->name,
+            'email' => $user->email,
+            'slack_webhook_url' => 'https://hooks.slack.com/services/T000/B000/xyz',
+        ])
+        ->assertSessionHasNoErrors();
+
+    expect($user->fresh()->slack_webhook_url)->toBe('https://hooks.slack.com/services/T000/B000/xyz');
+});
+
+test('a non-Slack webhook host is rejected (SSRF guard)', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user)
+        ->patch('/profile', [
+            'name' => $user->name,
+            'email' => $user->email,
+            'slack_webhook_url' => 'http://169.254.169.254/latest/meta-data/',
+        ])
+        ->assertSessionHasErrors('slack_webhook_url');
+
+    expect($user->fresh()->slack_webhook_url)->toBeNull();
+});
+
+test('a non-https Slack url is rejected', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user)
+        ->patch('/profile', [
+            'name' => $user->name,
+            'email' => $user->email,
+            'slack_webhook_url' => 'http://hooks.slack.com/services/T000/B000/xyz',
+        ])
+        ->assertSessionHasErrors('slack_webhook_url');
+});
+
 test('email verification status is unchanged when the email address is unchanged', function () {
     $user = User::factory()->create();
 

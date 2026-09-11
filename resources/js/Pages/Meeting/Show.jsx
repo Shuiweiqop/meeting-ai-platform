@@ -345,7 +345,11 @@ export default function Show({ meeting }) {
     const occurredMonth  = occurredAt ? occurredAt.slice(0, 7) : null;
     const occurredLabel  = occurredAt ? new Date(occurredAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : null;
     const segments       = meeting.transcript?.segments ?? null;
-    const shareUrl       = meeting.share_token ? `${window.location.origin}/share/${meeting.share_token}` : null;
+    const shareActive    = meeting.share_token && (!meeting.share_expires_at || new Date(meeting.share_expires_at) > new Date());
+    const shareUrl       = shareActive ? `${window.location.origin}/share/${meeting.share_token}` : null;
+    const shareExpiry    = shareActive && meeting.share_expires_at
+        ? new Date(meeting.share_expires_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+        : null;
     const [copied, setCopied]                   = useState(false);
     const [extractionProgress, setExtractionProgress] = useState(null);
 
@@ -405,13 +409,14 @@ export default function Show({ meeting }) {
                             <>
                                 {shareUrl ? (
                                     <button onClick={() => copyShareUrl(shareUrl)}
+                                        title={shareExpiry ? `Link active until ${shareExpiry}` : undefined}
                                         className="rounded-md bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-200">
                                         {copied ? '✓ Copied!' : '🔗 Copy Link'}
                                     </button>
                                 ) : (
                                     <button onClick={() => router.post(route('meetings.share.generate', meeting.id))}
                                         className="rounded-md bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-200">
-                                        Share
+                                        {meeting.share_token ? 'Renew share link' : 'Share'}
                                     </button>
                                 )}
                                 <a href={route('meetings.export', meeting.id)} target="_blank"

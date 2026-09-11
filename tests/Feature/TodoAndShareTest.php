@@ -166,5 +166,48 @@ it('owner can revoke a share link', function () {
         ->delete(route('meetings.share.revoke', $meeting))
         ->assertRedirect();
 
-    expect($meeting->fresh()->share_token)->toBeNull();
+    expect($meeting->fresh())
+        ->share_token->toBeNull()
+        ->share_expires_at->toBeNull();
+});
+
+it('generating a share link sets a future expiry', function () {
+    $user = User::factory()->create();
+    $meeting = Meeting::factory()->create(['user_id' => $user->id, 'status' => 'completed']);
+
+    $this->actingAs($user)->post(route('meetings.share.generate', $meeting))->assertRedirect();
+
+    expect($meeting->fresh()->share_expires_at->isFuture())->toBeTrue();
+});
+
+it('an expired share link shows the expired page, not the meeting', function () {
+    $user = User::factory()->create();
+    $meeting = Meeting::factory()->create([
+        'user_id' => $user->id,
+        'status' => 'completed',
+        'title' => 'Secret Q3 Numbers',
+        'share_token' => 'expiredtoken',
+        'share_expires_at' => now()->subDay(),
+    ]);
+
+    $this->get(route('share.show', 'expiredtoken'))
+        ->assertOk()
+        ->assertDontSee($meeting->title)
+        ->assertInertia(fn ($page) => $page->component('Share/Expired'));
+});
+
+it('regenerating an expired link issues a new token and fresh expiry', function () {
+    $user = User::factory()->create();
+    $meeting = Meeting::factory()->create([
+        'user_id' => $user->id,
+        'status' => 'completed',
+        'share_token' => 'oldtoken',
+        'share_expires_at' => now()->subDay(),
+    ]);
+
+    $this->actingAs($user)->post(route('meetings.share.generate', $meeting))->assertRedirect();
+
+    $fresh = $meeting->fresh();
+    expect($fresh->share_token)->not->toBe('oldtoken')
+        ->and($fresh->share_expires_at->isFuture())->toBeTrue();
 });

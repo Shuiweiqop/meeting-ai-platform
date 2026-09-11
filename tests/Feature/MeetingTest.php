@@ -2,10 +2,27 @@
 
 use App\Jobs\ProcessMeetingJob;
 use App\Models\Meeting;
+use App\Models\Team;
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+
+/** A team with an owner and one member, plus a meeting the owner uploaded to it. */
+function teamMeetingWith(User $owner, User $member): Meeting
+{
+    $team = Team::factory()->create(['owner_id' => $owner->id]);
+    $team->members()->attach($owner->id, ['role' => 'owner']);
+    $team->members()->attach($member->id, ['role' => 'member']);
+
+    return Meeting::factory()->create([
+        'user_id' => $owner->id,
+        'team_id' => $team->id,
+        'title' => 'Team Meeting',
+        'status' => 'completed',
+        'audio_path' => 'meetings/team.mp3',
+    ]);
+}
 
 // ─── Auth guards ──────────────────────────────────────────────────────────────
 
@@ -137,6 +154,65 @@ it('returns 403 when another user tries to view a meeting', function () {
     $meeting = Meeting::factory()->create(['user_id' => $owner->id]);
 
     $this->actingAs($other)
+        ->get(route('meetings.show', $meeting))
+        ->assertForbidden();
+});
+
+// ─── Team meeting access ────────────────────────────────────────────────────
+
+it('a team member can view a team meeting they did not upload', function () {
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $meeting = teamMeetingWith($owner, $member);
+
+    $this->actingAs($member)
+        ->get(route('meetings.show', $meeting))
+        ->assertOk()
+        ->assertSee('Team Meeting');
+});
+
+it('a team member can stream a team meeting\'s audio', function () {
+    Storage::fake('local');
+    Storage::disk('local')->put('meetings/team.mp3', 'bytes');
+
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $meeting = teamMeetingWith($owner, $member);
+
+    $this->actingAs($member)
+        ->get(route('meetings.audio', $meeting))
+        ->assertOk();
+});
+
+it('a team member CANNOT delete a team meeting they did not upload', function () {
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $meeting = teamMeetingWith($owner, $member);
+
+    $this->actingAs($member)
+        ->delete(route('meetings.destroy', $meeting))
+        ->assertForbidden();
+
+    $this->assertDatabaseHas('meetings', ['id' => $meeting->id]);
+});
+
+it('a team member CANNOT edit a team meeting they did not upload', function () {
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $meeting = teamMeetingWith($owner, $member);
+
+    $this->actingAs($member)
+        ->patch(route('meetings.update', $meeting), ['title' => 'Hijacked'])
+        ->assertForbidden();
+});
+
+it('a non-member cannot view a team meeting', function () {
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $outsider = User::factory()->create();
+    $meeting = teamMeetingWith($owner, $member);
+
+    $this->actingAs($outsider)
         ->get(route('meetings.show', $meeting))
         ->assertForbidden();
 });
