@@ -66,6 +66,36 @@ it('non-owner of meeting cannot toggle a todo', function () {
         ->assertForbidden();
 });
 
+it('assignee can set and clear a todo due date', function () {
+    $owner = User::factory()->create();
+    $assignee = User::factory()->create();
+    $meeting = Meeting::factory()->create(['user_id' => $owner->id]);
+    $todo = TodoItem::factory()->create([
+        'meeting_id' => $meeting->id,
+        'assigned_to' => $assignee->id,
+    ]);
+
+    $this->actingAs($assignee)
+        ->patch(route('todo-items.update', $todo), ['due_date' => '2026-08-20'])
+        ->assertOk();
+    expect($todo->fresh()->due_date->toDateString())->toBe('2026-08-20');
+
+    $this->actingAs($assignee)
+        ->patch(route('todo-items.update', $todo), ['due_date' => null])
+        ->assertOk();
+    expect($todo->fresh()->due_date)->toBeNull();
+});
+
+it('rejects an empty todo update', function () {
+    $owner = User::factory()->create();
+    $meeting = Meeting::factory()->create(['user_id' => $owner->id]);
+    $todo = TodoItem::factory()->create(['meeting_id' => $meeting->id, 'assigned_to' => $owner->id]);
+
+    $this->actingAs($owner)
+        ->patch(route('todo-items.update', $todo), [])
+        ->assertStatus(422);
+});
+
 // ─── Share link ───────────────────────────────────────────────────────────────
 
 it('owner can generate a share link for a completed meeting', function () {

@@ -341,6 +341,9 @@ function TodoRow({ todo: initial }) {
 export default function Show({ meeting }) {
     const audioUrl       = meeting.audio_path ? route('meetings.audio', meeting.id) : null;
     const isProcessing   = meeting.status === 'pending' || meeting.status === 'processing';
+    const occurredAt     = meeting.meeting_date ?? meeting.created_at;
+    const occurredMonth  = occurredAt ? occurredAt.slice(0, 7) : null;
+    const occurredLabel  = occurredAt ? new Date(occurredAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : null;
     const segments       = meeting.transcript?.segments ?? null;
     const shareUrl       = meeting.share_token ? `${window.location.origin}/share/${meeting.share_token}` : null;
     const [copied, setCopied]                   = useState(false);
@@ -382,9 +385,20 @@ export default function Show({ meeting }) {
         <AuthenticatedLayout
             header={
                 <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <h2 className="text-xl font-semibold leading-tight text-gray-800">{meeting.title}</h2>
-                        <StatusBadge status={meeting.status} />
+                    <div>
+                        <div className="flex items-center gap-3">
+                            <h2 className="text-xl font-semibold leading-tight text-gray-800">{meeting.title}</h2>
+                            <StatusBadge status={meeting.status} />
+                        </div>
+                        {occurredLabel && (
+                            <Link
+                                href={route('calendar', { month: occurredMonth })}
+                                className="mt-1 inline-flex items-center gap-1 text-xs text-gray-500 hover:text-indigo-600"
+                            >
+                                <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M6 2a1 1 0 0 0-1 1v1H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-1V3a1 1 0 1 0-2 0v1H7V3a1 1 0 0 0-1-1Zm10 6H4v8h12V8Z" clipRule="evenodd" /></svg>
+                                {occurredLabel} · View in calendar
+                            </Link>
+                        )}
                     </div>
                     <div className="flex items-center gap-3">
                         {meeting.status === 'completed' && (

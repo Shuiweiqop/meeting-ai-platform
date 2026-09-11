@@ -38,6 +38,12 @@ export default function AuthenticatedLayout({ header, children }) {
                                     Meetings
                                 </NavLink>
                                 <NavLink
+                                    href={route('calendar')}
+                                    active={route().current('calendar')}
+                                >
+                                    Calendar
+                                </NavLink>
+                                <NavLink
                                     href={route('teams.index')}
                                     active={route().current('teams.*')}
                                 >
@@ -158,6 +164,12 @@ export default function AuthenticatedLayout({ header, children }) {
                             active={route().current('meetings.*')}
                         >
                             Meetings
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink
+                            href={route('calendar')}
+                            active={route().current('calendar')}
+                        >
+                            Calendar
                         </ResponsiveNavLink>
                         <ResponsiveNavLink
                             href={route('teams.index')}

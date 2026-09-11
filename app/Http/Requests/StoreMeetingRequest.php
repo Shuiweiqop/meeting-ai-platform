@@ -16,6 +16,7 @@ class StoreMeetingRequest extends FormRequest
         return [
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
+            'meeting_date' => ['nullable', 'date'],
             'audio_file' => ['required', 'file', 'mimes:mp3,wav,m4a,ogg,mp4,mov,webm,mkv,avi', 'max:2097152'],
         ];
     }

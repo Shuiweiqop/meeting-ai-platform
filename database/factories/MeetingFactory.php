@@ -19,6 +19,7 @@ class MeetingFactory extends Factory
             'processing_stage' => null,
             'share_token' => null,
             'duration_seconds' => null,
+            'meeting_date' => null,
         ];
     }
 }

@@ -66,6 +66,7 @@ class MeetingController extends Controller
             'description' => $request->description,
             'audio_path' => $audioPath,
             'status' => 'pending',
+            'meeting_date' => $request->meeting_date ?: null,
         ]);
 
         ProcessMeetingJob::dispatch($meeting);

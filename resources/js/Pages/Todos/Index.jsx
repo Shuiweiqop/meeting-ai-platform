@@ -21,8 +21,23 @@ const TABS = [
     { key: 'completed',   label: 'Completed' },
 ];
 
+async function patchTodo(id, payload) {
+    const res = await fetch(route('todo-items.update', id), {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': window.csrfToken ?? '',
+            'X-Requested-With': 'XMLHttpRequest',
+        },
+        body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error('Request failed');
+    return res.json();
+}
+
 function TodoRow({ todo: initial }) {
     const [todo, setTodo] = useState(initial);
+    const [editingDue, setEditingDue] = useState(false);
 
     const toggle = async () => {
         const next = todo.status === 'completed' ? 'pending' : 'completed';
@@ -32,19 +47,23 @@ function TodoRow({ todo: initial }) {
         setTodo(t => ({ ...t, status: next }));
 
         try {
-            const res = await fetch(route('todo-items.update', todo.id), {
-                method:  'PATCH',
-                headers: {
-                    'Content-Type':  'application/json',
-                    'X-CSRF-TOKEN':  window.csrfToken ?? '',
-                    'X-Requested-With': 'XMLHttpRequest',
-                },
-                body: JSON.stringify({ status: next }),
-            });
-            if (!res.ok) throw new Error('Request failed');
+            await patchTodo(todo.id, { status: next });
         } catch {
             // Rollback on network error or server error
             setTodo(t => ({ ...t, status: prev }));
+        }
+    };
+
+    const changeDueDate = async (value) => {
+        const next = value || null;
+        const prev = todo.due_date ?? null;
+        setEditingDue(false);
+        setTodo(t => ({ ...t, due_date: next }));
+
+        try {
+            await patchTodo(todo.id, { due_date: next });
+        } catch {
+            setTodo(t => ({ ...t, due_date: prev }));
         }
     };
 
@@ -78,14 +97,42 @@ function TodoRow({ todo: initial }) {
                 {todo.description && (
                     <p className="mt-0.5 text-xs text-gray-500">{todo.description}</p>
                 )}
-                {todo.meeting && (
-                    <Link
-                        href={route('meetings.show', todo.meeting.id)}
-                        className="mt-1 inline-block text-xs text-indigo-500 hover:underline"
-                    >
-                        {todo.meeting.title}
-                    </Link>
-                )}
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    {todo.meeting && (
+                        <Link
+                            href={route('meetings.show', todo.meeting.id)}
+                            className="text-xs text-indigo-500 hover:underline"
+                        >
+                            {todo.meeting.title}
+                        </Link>
+                    )}
+
+                    {editingDue ? (
+                        <input
+                            type="date"
+                            autoFocus
+                            defaultValue={todo.due_date ?? ''}
+                            onBlur={(e) => changeDueDate(e.target.value)}
+                            onChange={(e) => e.target.value && changeDueDate(e.target.value)}
+                            className="rounded border-gray-200 py-0.5 text-xs focus:border-indigo-400 focus:ring-indigo-400"
+                        />
+                    ) : todo.due_date ? (
+                        <button
+                            onClick={() => setEditingDue(true)}
+                            className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-indigo-600"
+                        >
+                            <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M6 2a1 1 0 0 0-1 1v1H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-1V3a1 1 0 1 0-2 0v1H7V3a1 1 0 0 0-1-1Zm10 6H4v8h12V8Z" clipRule="evenodd" /></svg>
+                            Due {todo.due_date}
+                        </button>
+                    ) : (
+                        <button
+                            onClick={() => setEditingDue(true)}
+                            className="text-xs text-gray-400 hover:text-indigo-600"
+                        >
+                            + Add due date
+                        </button>
+                    )}
+                </div>
             </div>
 
             <span className={`shrink-0 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_STYLES[todo.status]}`}>

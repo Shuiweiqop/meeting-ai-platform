@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\ChunkUploadController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\MeetingController;
@@ -26,6 +27,9 @@ Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
+
+    Route::get('/calendar', [CalendarController::class, '__invoke'])->name('calendar');
+    Route::get('/calendar/export', [CalendarController::class, 'export'])->name('calendar.export');
 
     Route::resource('meetings', MeetingController::class);
     Route::get('/meetings/{meeting}/audio', [MeetingController::class, 'audio'])->name('meetings.audio');

@@ -20,6 +20,9 @@ Editing a committed migration's `up()` changes what a fresh `migrate` produces w
 ## `meetings.status` / `processing_stage` coupling
 `processing_stage` is non-null only while `status = 'processing'` — both `completed` and `failed` set it back to `null` (see [pipeline.md](pipeline.md)). This pairing is now enforced: `Meeting::transitionTo(string $status, ?ProcessingStage $stage = null)` is the only writer of the pair, throws `LogicException` on an inconsistent combination, and broadcasts `MeetingStatusUpdated` on every change (tested in `tests/Feature/ProcessMeetingPipelineTest.php`). Never write `status` or `processing_stage` via a bare `update()` — that reintroduces the stuck-progress-bar failure mode by skipping the guard and the broadcast.
 
+## `meetings.meeting_date` is optional; read it via `occurredAt()`
+`meeting_date` (nullable timestamp) is when the meeting actually happened, set optionally at upload. It's distinct from `created_at` (upload time). Never read `meeting_date` directly for display or grouping — call `Meeting::occurredAt()`, which falls back to `created_at` when it's null, so the fallback lives in one place. The calendar (`CalendarController` → `Meeting/Calendar.jsx`) groups by this; its month filter uses `COALESCE(meeting_date, created_at)` in SQL to match `occurredAt()` exactly, so a row can't be filtered into a month but grouped into a different day.
+
 ## `transcripts.content` vs `transcripts.segments`
 `segments` (JSON) is the source of truth; `content` (plain text) is a derived join of segments, kept because PDF export, the Slack notification, and (potentially) full-text search read it directly rather than re-deriving from segments. If segment-generation logic changes, `content`'s derivation in `ProcessMeetingJob::handle()` must change with it — nothing will flag content silently going stale relative to segments, since they're independent columns.
 

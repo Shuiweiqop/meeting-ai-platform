@@ -42,6 +42,7 @@ function formatBytes(bytes) {
 export default function Upload({ teams = [] }) {
     const [title,       setTitle]       = useState('');
     const [description, setDescription] = useState('');
+    const [meetingDate, setMeetingDate] = useState('');
     const [teamId,      setTeamId]      = useState('');
     const [file,        setFile]        = useState(null);
     const [progress,    setProgress]    = useState(0);
@@ -84,6 +85,7 @@ export default function Upload({ teams = [] }) {
                     total_chunks: totalChunks,
                     title:        title.trim(),
                     description:  description.trim() || null,
+                    meeting_date: meetingDate || null,
                     team_id:      teamId || null,
                 }),
             });
@@ -149,6 +151,22 @@ export default function Upload({ teams = [] }) {
                                     placeholder="What was this meeting about?"
                                     disabled={uploading}
                                 />
+                            </div>
+
+                            {/* Meeting date */}
+                            <div>
+                                <InputLabel htmlFor="meeting_date" value="Meeting date (optional)" />
+                                <TextInput
+                                    id="meeting_date"
+                                    type="datetime-local"
+                                    className="mt-1 block w-full"
+                                    value={meetingDate}
+                                    onChange={(e) => setMeetingDate(e.target.value)}
+                                    disabled={uploading}
+                                />
+                                <p className="mt-1 text-xs text-gray-400">
+                                    When the meeting actually happened. Defaults to the upload time if left blank.
+                                </p>
                             </div>
 
                             {/* Team */}

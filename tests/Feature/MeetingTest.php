@@ -83,6 +83,25 @@ it('uploads an audio file and dispatches processing job', function () {
     Storage::disk('local')->assertExists('meetings/'.$file->hashName());
 });
 
+it('stores the meeting_date when provided on upload', function () {
+    Queue::fake();
+    Storage::fake('local');
+
+    $user = User::factory()->create();
+    $file = UploadedFile::fake()->create('meeting.mp3', 500, 'audio/mpeg');
+
+    $this->actingAs($user)
+        ->post(route('meetings.store'), [
+            'title' => 'Dated Meeting',
+            'meeting_date' => '2026-08-14 09:30:00',
+            'audio_file' => $file,
+        ])
+        ->assertRedirect(route('meetings.index'));
+
+    $meeting = Meeting::where('title', 'Dated Meeting')->firstOrFail();
+    expect($meeting->meeting_date->format('Y-m-d H:i'))->toBe('2026-08-14 09:30');
+});
+
 it('rejects upload without a title', function () {
     $user = User::factory()->create();
     $file = UploadedFile::fake()->create('meeting.mp3', 100, 'audio/mpeg');

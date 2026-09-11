@@ -10,6 +10,9 @@ Every mutating/viewing action on a user-owned resource checks ownership with `ab
 
 Picking the wrong variant for a new action is the actual risk: applying single-owner logic to a team-scoped or assignment-scoped resource locks out people who should have access (e.g. a team member trying to view a team, or an assignee trying to complete their own todo) rather than merely being over-permissive. Check which relationship — ownership, membership, or assignment — actually governs the resource before copying a pattern.
 
+## Calendar scope: personal vs team view, and what the .ics export must mirror
+`CalendarController` (`__invoke` for the grid, `export` for `.ics`) has two scopes that must stay in sync between the two methods and their tests: **personal view** (no `?team=`) shows the user's own meetings *plus* their dated todos; **team view** (`?team={id}`, validated against teams the user owns or belongs to) shows that team's meetings and *no* todos (todos are assignment-scoped, not team-scoped). The `.ics` export applies the exact same scoping — if you change one, change the other, or the download silently disagrees with the on-screen calendar. `.ics` formatting lives in `App\Support\IcsBuilder` (CRLF, escaping, unique UIDs); don't hand-build iCalendar strings in the controller.
+
 ## Audio is served through a guarded route, never a public URL
 Recordings live on the private `local` disk; `MeetingController::audio` (`GET /meetings/{meeting}/audio`) is the only way to reach them, behind the single-owner `abort_if`. Never store meeting audio on the `public` disk or link it via `/storage/...` — that hands out the uploader's raw recording to anyone holding the URL, with no revocation. The response is a `BinaryFileResponse` because `<audio>` seeking needs HTTP Range support.
 

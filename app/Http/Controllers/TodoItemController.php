@@ -48,10 +48,20 @@ class TodoItemController extends Controller
 
         abort_if(! $isOwner && ! $isAssignee, 403);
 
-        $request->validate(['status' => ['required', 'in:pending,in_progress,completed']]);
+        // Both fields are optional so the same endpoint serves the status toggle
+        // and the due-date picker; only what's present is written.
+        $validated = $request->validate([
+            'status' => ['sometimes', 'in:pending,in_progress,completed'],
+            'due_date' => ['sometimes', 'nullable', 'date'],
+        ]);
 
-        $todoItem->update(['status' => $request->status]);
+        abort_if(empty($validated), 422, 'Nothing to update.');
 
-        return response()->json(['status' => $todoItem->status]);
+        $todoItem->update($validated);
+
+        return response()->json([
+            'status' => $todoItem->status,
+            'due_date' => $todoItem->due_date?->toDateString(),
+        ]);
     }
 }

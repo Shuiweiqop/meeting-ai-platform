@@ -41,6 +41,7 @@ class ChunkUploadController extends Controller
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'team_id' => ['nullable', 'exists:teams,id'],
+            'meeting_date' => ['nullable', 'date'],
         ]);
 
         $uploadId = $request->upload_id;
@@ -80,6 +81,7 @@ class ChunkUploadController extends Controller
             'description' => $request->description,
             'audio_path' => $finalRelPath,
             'status' => 'pending',
+            'meeting_date' => $request->meeting_date ?: null,
         ]);
 
         ProcessMeetingJob::dispatch($meeting);
