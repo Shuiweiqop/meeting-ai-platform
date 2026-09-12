@@ -92,8 +92,26 @@ class MeetingController extends Controller
     {
         abort_unless($meeting->isAccessibleBy(Auth::user()), 403);
 
+        $meeting->load(['transcript', 'aiSummary', 'todoItems.assignee']);
+
+        $canManage = $meeting->isManageableBy(Auth::user());
+
+        // People a task can be reassigned to: the uploader plus, for a team
+        // meeting, the team's members. Only needed when the viewer can manage.
+        $assignableUsers = [];
+        if ($canManage) {
+            $meeting->loadMissing('team.members');
+            $assignableUsers = collect([$meeting->uploader])
+                ->merge($meeting->team?->members ?? [])
+                ->unique('id')
+                ->map(fn ($u) => ['id' => $u->id, 'name' => $u->name])
+                ->values();
+        }
+
         return Inertia::render('Meeting/Show', [
-            'meeting' => $meeting->load(['transcript', 'aiSummary', 'todoItems.assignee']),
+            'meeting' => $meeting,
+            'canManage' => $canManage,
+            'assignableUsers' => $assignableUsers,
         ]);
     }
 

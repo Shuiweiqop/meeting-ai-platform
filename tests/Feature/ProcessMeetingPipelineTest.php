@@ -50,3 +50,32 @@ it('refuses a processing_stage on a non-processing status', function () {
 it('refuses an unknown status', function () {
     Meeting::factory()->create()->transitionTo('done');
 })->throws(LogicException::class);
+
+// ─── AI due-date parsing ─────────────────────────────────────────────────────
+
+function invokeParseDueDate(Meeting $meeting, mixed $value): ?string
+{
+    $job = new ProcessMeetingJob($meeting);
+
+    return (new ReflectionMethod($job, 'parseDueDate'))->invoke($job, $value);
+}
+
+it('parses a valid AI due date to Y-m-d', function () {
+    $meeting = Meeting::factory()->create();
+
+    expect(invokeParseDueDate($meeting, '2026-08-20'))->toBe('2026-08-20');
+});
+
+it('returns null for a null, empty, or non-string due date', function () {
+    $meeting = Meeting::factory()->create();
+
+    expect(invokeParseDueDate($meeting, null))->toBeNull()
+        ->and(invokeParseDueDate($meeting, ''))->toBeNull()
+        ->and(invokeParseDueDate($meeting, ['nope']))->toBeNull();
+});
+
+it('returns null for a garbage due date instead of throwing', function () {
+    $meeting = Meeting::factory()->create();
+
+    expect(invokeParseDueDate($meeting, 'sometime next quarter maybe'))->toBeNull();
+});

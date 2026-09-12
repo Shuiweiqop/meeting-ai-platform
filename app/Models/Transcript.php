@@ -17,6 +17,22 @@ class Transcript extends Model
         return ['segments' => 'array'];
     }
 
+    /**
+     * Plain-text `content` is derived from `segments` (the source of truth) as
+     * "Speaker: text" blocks. PDF export and Slack read `content`, so any code
+     * that writes `segments` must re-derive `content` through here — this is the
+     * single definition, shared by ProcessMeetingJob and the segment editor, so
+     * the two can't drift (see .agents/data-model.md).
+     *
+     * @param  array<int, array{start?: float, speaker?: string, text?: string}>  $segments
+     */
+    public static function contentFromSegments(array $segments): string
+    {
+        return collect($segments)
+            ->map(fn ($s) => trim((! empty($s['speaker']) ? "{$s['speaker']}: " : '').($s['text'] ?? '')))
+            ->implode("\n\n");
+    }
+
     public function meeting(): BelongsTo
     {
         return $this->belongsTo(Meeting::class);

@@ -8,6 +8,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SharedMeetingController;
 use App\Http\Controllers\TeamController;
 use App\Http\Controllers\TodoItemController;
+use App\Http\Controllers\TranscriptController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
@@ -39,6 +40,8 @@ Route::middleware('auth')->group(function () {
     Route::delete('/meetings/{meeting}/share', [SharedMeetingController::class, 'revoke'])->name('meetings.share.revoke');
     Route::post('/upload/chunk', [ChunkUploadController::class, 'chunk'])->name('upload.chunk');
     Route::post('/upload/merge', [ChunkUploadController::class, 'merge'])->name('upload.merge');
+
+    Route::patch('/transcripts/{transcript}', [TranscriptController::class, 'update'])->name('transcripts.update');
 
     Route::get('/todos', [TodoItemController::class, 'index'])->name('todos.index');
     Route::patch('/todo-items/{todoItem}', [TodoItemController::class, 'update'])->name('todo-items.update');

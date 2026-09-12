@@ -291,9 +291,93 @@ function AudioTranscriptSync({ meeting, segments }) {
     );
 }
 
+// ─── Transcript editor ─────────────────────────────────────────────────────
+
+/**
+ * Edit mode for the transcript. Renders a plain (non-virtualized) editable list
+ * so every speaker/text field is a real input; virtualization is only needed
+ * for the read-only synced view. Saves the whole segments array at once.
+ */
+function TranscriptEditor({ transcriptId, segments, onSaved, onCancel }) {
+    const [draft, setDraft] = useState(() => segments.map(s => ({ ...s })));
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState(null);
+
+    const setField = (i, field, value) =>
+        setDraft(d => d.map((s, idx) => (idx === i ? { ...s, [field]: value } : s)));
+
+    const save = async () => {
+        setSaving(true);
+        setError(null);
+        try {
+            const res = await fetch(route('transcripts.update', transcriptId), {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': window.csrfToken ?? '',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: JSON.stringify({ segments: draft }),
+            });
+            if (!res.ok) throw new Error('Save failed');
+            const data = await res.json();
+            onSaved(data.segments);
+        } catch {
+            setError('Could not save. Please try again.');
+            setSaving(false);
+        }
+    };
+
+    return (
+        <div>
+            <div className="max-h-96 space-y-2 overflow-y-auto rounded-md border border-gray-100 bg-gray-50 p-3">
+                {draft.map((seg, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                        <span className="mt-2 w-12 shrink-0 text-right text-xs tabular-nums text-gray-400">
+                            {formatTime(seg.start)}
+                        </span>
+                        <input
+                            type="text"
+                            value={seg.speaker ?? ''}
+                            onChange={(e) => setField(i, 'speaker', e.target.value)}
+                            placeholder="Speaker"
+                            className="w-28 shrink-0 rounded border-gray-200 py-1 text-xs font-semibold text-indigo-600 focus:border-indigo-400 focus:ring-indigo-400"
+                        />
+                        <textarea
+                            value={seg.text ?? ''}
+                            onChange={(e) => setField(i, 'text', e.target.value)}
+                            rows={1}
+                            className="flex-1 rounded border-gray-200 py-1 text-sm text-gray-700 focus:border-indigo-400 focus:ring-indigo-400"
+                        />
+                    </div>
+                ))}
+            </div>
+
+            {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+
+            <div className="mt-3 flex items-center justify-end gap-2">
+                <button
+                    onClick={onCancel}
+                    disabled={saving}
+                    className="rounded-md px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                >
+                    Cancel
+                </button>
+                <button
+                    onClick={save}
+                    disabled={saving}
+                    className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                >
+                    {saving ? 'Saving…' : 'Save changes'}
+                </button>
+            </div>
+        </div>
+    );
+}
+
 // ─── Optimistic todo row ───────────────────────────────────────────────────
 
-function TodoRow({ todo: initial }) {
+function TodoRow({ todo: initial, canManage = false, assignableUsers = [] }) {
     const [todo, setTodo] = useState(initial);
 
     const toggle = () => {
@@ -304,6 +388,18 @@ function TodoRow({ todo: initial }) {
             route('todo-items.update', todo.id),
             { status: next },
             { preserveScroll: true, onError: () => setTodo(t => ({ ...t, status: prev })) },
+        );
+    };
+
+    const reassign = (value) => {
+        const nextId = value ? Number(value) : null;
+        const prev = todo.assignee;
+        const nextAssignee = assignableUsers.find(u => u.id === nextId) ?? null;
+        setTodo(t => ({ ...t, assignee: nextAssignee }));
+        router.patch(
+            route('todo-items.update', todo.id),
+            { assigned_to: nextId },
+            { preserveScroll: true, onError: () => setTodo(t => ({ ...t, assignee: prev })) },
         );
     };
 
@@ -330,7 +426,20 @@ function TodoRow({ todo: initial }) {
                     {todo.title}
                 </p>
                 {todo.description && <p className="mt-0.5 text-xs text-gray-500">{todo.description}</p>}
-                {todo.assignee && <p className="mt-1 text-xs text-indigo-600">→ {todo.assignee.name}</p>}
+                {canManage && assignableUsers.length > 0 ? (
+                    <select
+                        value={todo.assignee?.id ?? ''}
+                        onChange={(e) => reassign(e.target.value)}
+                        className="mt-1 rounded border-gray-200 py-0.5 text-xs text-indigo-600 focus:border-indigo-400 focus:ring-indigo-400"
+                    >
+                        <option value="">— Unassigned —</option>
+                        {assignableUsers.map(u => (
+                            <option key={u.id} value={u.id}>{u.name}</option>
+                        ))}
+                    </select>
+                ) : (
+                    todo.assignee && <p className="mt-1 text-xs text-indigo-600">→ {todo.assignee.name}</p>
+                )}
             </div>
         </li>
     );
@@ -338,13 +447,14 @@ function TodoRow({ todo: initial }) {
 
 // ─── Page ──────────────────────────────────────────────────────────────────
 
-export default function Show({ meeting }) {
+export default function Show({ meeting, canManage = false, assignableUsers = [] }) {
     const audioUrl       = meeting.audio_path ? route('meetings.audio', meeting.id) : null;
     const isProcessing   = meeting.status === 'pending' || meeting.status === 'processing';
     const occurredAt     = meeting.meeting_date ?? meeting.created_at;
     const occurredMonth  = occurredAt ? occurredAt.slice(0, 7) : null;
     const occurredLabel  = occurredAt ? new Date(occurredAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : null;
-    const segments       = meeting.transcript?.segments ?? null;
+    // Segments are state so a saved transcript edit updates the view in place.
+    const [segments, setSegments] = useState(meeting.transcript?.segments ?? null);
     const shareActive    = meeting.share_token && (!meeting.share_expires_at || new Date(meeting.share_expires_at) > new Date());
     const shareUrl       = shareActive ? `${window.location.origin}/share/${meeting.share_token}` : null;
     const shareExpiry    = shareActive && meeting.share_expires_at
@@ -352,6 +462,7 @@ export default function Show({ meeting }) {
         : null;
     const [copied, setCopied]                   = useState(false);
     const [extractionProgress, setExtractionProgress] = useState(null);
+    const [editingTranscript, setEditingTranscript]   = useState(false);
 
     const copyShareUrl = (url) => {
         navigator.clipboard.writeText(url);
@@ -474,10 +585,29 @@ export default function Show({ meeting }) {
 
                     {/* Transcript — synced if segments available, plain text otherwise */}
                     <div className="rounded-lg bg-white p-6 shadow-sm ring-1 ring-gray-200">
-                        <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-4">Transcript</h3>
+                        <div className="mb-4 flex items-center justify-between">
+                            <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-500">Transcript</h3>
+                            {canManage && segments?.length > 0 && !editingTranscript && (
+                                <button
+                                    onClick={() => setEditingTranscript(true)}
+                                    className="text-xs font-medium text-indigo-600 hover:text-indigo-500"
+                                >
+                                    Edit transcript
+                                </button>
+                            )}
+                        </div>
                         {meeting.transcript ? (
                             segments?.length > 0 ? (
-                                <AudioTranscriptSync meeting={meeting} segments={segments} />
+                                editingTranscript ? (
+                                    <TranscriptEditor
+                                        transcriptId={meeting.transcript.id}
+                                        segments={segments}
+                                        onSaved={(next) => { setSegments(next); setEditingTranscript(false); }}
+                                        onCancel={() => setEditingTranscript(false)}
+                                    />
+                                ) : (
+                                    <AudioTranscriptSync meeting={meeting} segments={segments} />
+                                )
                             ) : (
                                 <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap text-sm text-gray-700 leading-relaxed font-sans">
                                     {meeting.transcript.content}
@@ -529,7 +659,7 @@ export default function Show({ meeting }) {
                         </h3>
                         {meeting.todo_items?.length > 0 ? (
                             <ul className="mt-2 divide-y divide-gray-100">
-                                {meeting.todo_items.map(todo => <TodoRow key={todo.id} todo={todo} />)}
+                                {meeting.todo_items.map(todo => <TodoRow key={todo.id} todo={todo} canManage={canManage} assignableUsers={assignableUsers} />)}
                             </ul>
                         ) : (
                             <p className="mt-3 text-sm text-gray-400 italic">

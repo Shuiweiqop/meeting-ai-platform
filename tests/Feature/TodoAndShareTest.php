@@ -96,6 +96,34 @@ it('rejects an empty todo update', function () {
         ->assertStatus(422);
 });
 
+it('the meeting owner can reassign a todo to another user', function () {
+    $owner = User::factory()->create();
+    $other = User::factory()->create();
+    $meeting = Meeting::factory()->create(['user_id' => $owner->id]);
+    $todo = TodoItem::factory()->create(['meeting_id' => $meeting->id, 'assigned_to' => null]);
+
+    $this->actingAs($owner)
+        ->patch(route('todo-items.update', $todo), ['assigned_to' => $other->id])
+        ->assertOk();
+
+    expect($todo->fresh()->assigned_to)->toBe($other->id);
+});
+
+it('an assignee cannot reassign their task to someone else', function () {
+    $owner = User::factory()->create();
+    $assignee = User::factory()->create();
+    $victim = User::factory()->create();
+    $meeting = Meeting::factory()->create(['user_id' => $owner->id]);
+    $todo = TodoItem::factory()->create(['meeting_id' => $meeting->id, 'assigned_to' => $assignee->id]);
+
+    // The assignee may toggle status, but reassignment is owner-only.
+    $this->actingAs($assignee)
+        ->patch(route('todo-items.update', $todo), ['assigned_to' => $victim->id])
+        ->assertForbidden();
+
+    expect($todo->fresh()->assigned_to)->toBe($assignee->id);
+});
+
 // ─── Share link ───────────────────────────────────────────────────────────────
 
 it('owner can generate a share link for a completed meeting', function () {

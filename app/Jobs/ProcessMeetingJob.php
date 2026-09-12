@@ -23,6 +23,7 @@ use Gemini\Enums\MimeType;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Concurrency;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -72,10 +73,8 @@ class ProcessMeetingJob implements ShouldBeUnique, ShouldQueue
             $segments = $this->mapSpeakers($segments, $participantNames);
         }
 
-        // Build plain-text content from segments for backwards compatibility
-        $content = collect($segments)
-            ->map(fn ($s) => trim(($s['speaker'] ? "{$s['speaker']}: " : '').$s['text']))
-            ->implode("\n\n");
+        // Plain-text content is derived from segments (single definition on the model).
+        $content = Transcript::contentFromSegments($segments);
 
         Transcript::create([
             'meeting_id' => $this->meeting->id,
@@ -339,9 +338,29 @@ PROMPT;
                 'assigned_to' => $assignee?->id,
                 'title' => $todo['title'] ?? 'Untitled task',
                 'description' => $todo['description'] ?? null,
-                'due_date' => null,
+                'due_date' => $this->parseDueDate($todo['due_date'] ?? null),
                 'status' => 'pending',
             ]);
+        }
+    }
+
+    /**
+     * Turn Gemini's free-text due date into a safe Y-m-d string or null. The
+     * model can return null, a valid date, or garbage — a malformed value must
+     * degrade to "no due date" (like the pre-AI behaviour), never throw.
+     */
+    private function parseDueDate(mixed $value): ?string
+    {
+        if (empty($value) || ! is_string($value)) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($value)->toDateString();
+        } catch (\Throwable) {
+            Log::warning("ProcessMeetingJob [{$this->meeting->id}]: unparseable AI due_date [{$value}] — leaving blank.");
+
+            return null;
         }
     }
 
@@ -364,12 +383,20 @@ PROMPT;
 
     private function callGeminiForTodos(string $transcript, string $apiKey): string
     {
+        // Give Gemini the meeting date so it can resolve relative deadlines
+        // ("by next Friday", "in two weeks") into absolute calendar dates.
+        $meetingDate = $this->meeting->occurredAt()->toDateString();
+
         $prompt = <<<PROMPT
 You are an expert meeting analyst. Extract all action items from the following meeting transcript.
 Respond with ONLY a valid JSON array — no markdown, no code fences, no commentary.
 
+The meeting took place on {$meetingDate}. When an action item mentions a deadline
+(e.g. "by Friday", "end of month", "in two weeks"), resolve it to an absolute date
+in YYYY-MM-DD format relative to the meeting date. If no deadline is mentioned, use null.
+
 Required structure:
-[{"title": "...", "description": "...", "assignee_name": "... or empty string"}]
+[{"title": "...", "description": "...", "assignee_name": "... or empty string", "due_date": "YYYY-MM-DD or null"}]
 
 TRANSCRIPT:
 {$transcript}

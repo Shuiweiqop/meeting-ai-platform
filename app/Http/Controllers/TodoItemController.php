@@ -43,25 +43,35 @@ class TodoItemController extends Controller
 
     public function update(Request $request, TodoItem $todoItem): JsonResponse
     {
-        $isOwner = $todoItem->meeting->user_id === Auth::id();
+        $isManager = $todoItem->meeting->isManageableBy(Auth::user());
         $isAssignee = $todoItem->assigned_to === Auth::id();
 
-        abort_if(! $isOwner && ! $isAssignee, 403);
+        abort_if(! $isManager && ! $isAssignee, 403);
 
-        // Both fields are optional so the same endpoint serves the status toggle
-        // and the due-date picker; only what's present is written.
+        // status/due_date can be changed by the manager or the assignee; but
+        // reassigning (changing who owns the task) is a manager-only action —
+        // an assignee must not hand their task off to someone else.
+        if ($request->has('assigned_to')) {
+            abort_unless($isManager, 403, 'Only the meeting owner can reassign a task.');
+        }
+
+        // Fields are optional so one endpoint serves the status toggle, the
+        // due-date picker, and reassignment; only what's present is written.
         $validated = $request->validate([
             'status' => ['sometimes', 'in:pending,in_progress,completed'],
             'due_date' => ['sometimes', 'nullable', 'date'],
+            'assigned_to' => ['sometimes', 'nullable', 'exists:users,id'],
         ]);
 
         abort_if(empty($validated), 422, 'Nothing to update.');
 
         $todoItem->update($validated);
+        $todoItem->load('assignee:id,name');
 
         return response()->json([
             'status' => $todoItem->status,
             'due_date' => $todoItem->due_date?->toDateString(),
+            'assignee' => $todoItem->assignee ? ['id' => $todoItem->assignee->id, 'name' => $todoItem->assignee->name] : null,
         ]);
     }
 }

@@ -5,8 +5,9 @@ Not sunk into code: no Policy classes, no middleware-based ownership check, no a
 ## Authorization shape — match the one for your resource
 Every mutating/viewing action checks authorization with `abort_if`/`abort_unless(...)` as the first line, before any read or mutation:
 - **Meeting — view vs. manage are split** (`Meeting::isAccessibleBy` / `isManageableBy`, the single source of truth). *View* (show, audio, exportPdf) is the uploader **or any member of the meeting's team**; *manage* (edit, update, destroy, retry, share-link generate/revoke) is the uploader only. `abort_unless($meeting->isAccessibleBy(Auth::user()), 403)` vs. `isManageableBy`. Widening viewing must never widen mutation — that's why they're two methods, not one. Any new meeting action must call the right one; don't re-derive `user_id === Auth::id()` inline (it silently excludes team members from a read action, or lets a member mutate someone's recording).
+- **Manage-only, via the meeting** (`TranscriptController::update`): editing a transcript is `abort_unless($transcript->meeting->isManageableBy(Auth::user()), 403)` — team members read the transcript but only the uploader corrects it. Re-derives `content` on save (data-model.md).
 - **Owner-or-member** (`TeamController::show`): `abort_if($team->owner_id !== Auth::id() && ! $team->members()->where('users.id', Auth::id())->exists(), 403)`.
-- **Owner-or-assignee** (`TodoItemController::update`): uploader of the meeting or the todo's assignee can update it.
+- **Owner-or-assignee, but reassignment is manager-only** (`TodoItemController::update`): the meeting's manager or the todo's assignee may change `status`/`due_date`; changing `assigned_to` (reassignment) is gated to the manager alone, so an assignee can't hand their task to someone else. One endpoint, two authorization levels by field present.
 
 The broadcast channel `meetings.{id}` (routes/channels.php) uses `isAccessibleBy` too, so team members receive live progress for meetings they can open. `team_id` is nullable — a personal meeting is never visible to anyone but its uploader, which `isAccessibleBy` enforces by guarding on `team_id !== null` first.
 
